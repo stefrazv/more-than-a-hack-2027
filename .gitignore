@@ -62,3 +62,7 @@ __pycache__/
 venv/
 env/
 .DS_Store
+
+# Fisiere generate local pentru analiza trackingului
+/features_ball.csv
+/ball_intervals.csv

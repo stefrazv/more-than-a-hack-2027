@@ -15,6 +15,23 @@ MIN_DISTANCE_MARGIN_M = 0.75
 CONFIRMATION_FRAMES = 5
 
 
+DEAD_PATH = PROJECT_ROOT / "dead_ball_candidates.csv"
+
+
+def read_dead(path):
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path.name} lipseste. Ruleaza intai: python src/dead_ball.py"
+        )
+
+    with path.open("r", newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+
+    if len(rows) != EXPECTED_FRAMES:
+        raise ValueError(f"Numar incorect de cadre D: {len(rows)}")
+
+    return [row["dead_candidate"] == "1" for row in rows]
+
 def candidate_team(row):
     """
     Identifică echipa cu dovezi geometrice clare.
@@ -50,11 +67,11 @@ def candidate_team(row):
     return None
 
 
-def estimate_possession(rows):
+def estimate_possession(rows, dead):
     """
     Automat de stări H/A.
 
-    U = posesie încă necunoscută (doar rezultat intermediar).
+    U = posesie încă necunoscută (doar rezultat intermediar). la fiecare cadru D automat este resetat: dupa oprire, posesia este reluata doar din dovezi noi
     """
     labels = []
     current_team = None
@@ -66,6 +83,13 @@ def estimate_possession(rows):
     transitions = []
 
     for index, row in enumerate(rows):
+        if dead[index]:
+            current_team = None
+            pending_team = None
+            pending_start = None
+            pending_count = 0
+            labels.append("U")
+            continue
         candidate = candidate_team(row)
 
         # Încă nu avem o posesie inițială.
@@ -137,8 +161,10 @@ def main():
             raise ValueError(
                 f"Index incorect la cadrul {index}"
             )
-
-    labels, transitions = estimate_possession(rows)
+    
+    
+    dead = read_dead(DEAD_PATH)
+    labels, transitions = estimate_possession(rows, dead)
 
     with OUTPUT_PATH.open(
         "w", newline="", encoding="utf-8"

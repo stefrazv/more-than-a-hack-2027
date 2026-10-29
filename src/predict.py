@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 INPUT = ROOT / "possession_ha.csv"
 DEAD_CANDIDATES = ROOT / "dead_ball_candidates.csv"
-OUTPUT = ROOT / "submission_v3.csv"
+OUTPUT = ROOT / "submission_v4.csv"
 
 N_FRAMES = 199_319
 
@@ -81,31 +81,35 @@ def read_dead_candidates():
 
 def fill_unknown(labels, start, end):
     """
-    Completeaza U folosind posesia cunoscuta
-    din acelasi interval evaluat.
+    Completeaza U in intervalul evaluat.
+
+    U apare la inceputul intervalului sau dupa o oprire (D), cand automatul
+    a fost resetat. Le dam echipa primei dovezi care urmeaza (propagare
+    inapoi), NU echipa de dinaintea opririi. Doar coada fara nicio dovada
+    ulterioara primeste ultima echipa cunoscuta.
     """
     result = labels[start:end + 1].copy()
 
-    first_known = next(
-        (label for label in result if label in {"H", "A"}),
-        None,
-    )
+    next_known = None
+    for index in range(len(result) - 1, -1, -1):
+        if result[index] in {"H", "A"}:
+            next_known = result[index]
+        elif next_known is not None:
+            result[index] = next_known
 
-    if first_known is None:
+    last_known = None
+    for index, label in enumerate(result):
+        if label in {"H", "A"}:
+            last_known = label
+        elif last_known is not None:
+            result[index] = last_known
+
+    if "U" in result:
         raise ValueError(
             f"Nicio posesie cunoscuta in intervalul {start}-{end}"
         )
 
-    last_known = first_known
-
-    for index, label in enumerate(result):
-        if label in {"H", "A"}:
-            last_known = label
-        else:
-            result[index] = last_known
-
     return result
-
 
 def main():
     possession = read_possession()
@@ -161,7 +165,7 @@ def main():
             writer.writerow([frame, label])
 
     # 6. Afisam statisticile finale.
-    print("=== SUBMISSION V3 ===")
+    print("=== SUBMISSION V4 ===")
 
     for label in ("H", "A", "D", "X"):
         print(f"Cadre {label}: {submission.count(label)}")

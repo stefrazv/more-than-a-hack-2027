@@ -66,3 +66,9 @@ env/
 # Fisiere generate local pentru analiza trackingului
 /features_ball.csv
 /ball_intervals.csv
+
+/possession_ha.csv
+/submission_v1.csv
+/dead_ball_candidates.csv
+/submission_v2.csv
+/submission_v3.csv

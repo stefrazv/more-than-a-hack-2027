@@ -12,7 +12,7 @@ EXPECTED_FRAMES = 199_319
 # Parametri inițiali, euristici — NU optimizați pe ground truth.
 MAX_CONTROL_DISTANCE_M = 2.0
 MIN_DISTANCE_MARGIN_M = 0.75
-CONFIRMATION_FRAMES = 5
+CONFIRMATION_FRAMES = 25
 
 
 DEAD_PATH = PROJECT_ROOT / "dead_ball_candidates.csv"

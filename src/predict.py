@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 INPUT = ROOT / "possession_ha.csv"
 DEAD_CANDIDATES = ROOT / "dead_ball_candidates.csv"
-OUTPUT = ROOT / "submission_v4.csv"
+OUTPUT = ROOT / "submission_v5.csv"
 
 N_FRAMES = 199_319
 
@@ -165,7 +165,7 @@ def main():
             writer.writerow([frame, label])
 
     # 6. Afisam statisticile finale.
-    print("=== SUBMISSION V4 ===")
+    print("=== SUBMISSION V5 ===")
 
     for label in ("H", "A", "D", "X"):
         print(f"Cadre {label}: {submission.count(label)}")

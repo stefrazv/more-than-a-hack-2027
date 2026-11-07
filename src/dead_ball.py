@@ -222,6 +222,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from starter.load_smart_tagging import load as load_smart_tagging
+from src.paths import FEATURES, DEAD
 
 FPS = 25
 
@@ -237,7 +238,7 @@ def main():
     print("=== GENERARE DEAD BALL V4 (CONSERVATOR) ===")
     
     # 1. Încărcare date
-    features_path = ROOT / "features_ball.csv"
+    features_path = FEATURES
     df = pd.read_csv(features_path)
     events = load_smart_tagging()
     
@@ -325,7 +326,7 @@ def main():
     is_d[110808:113742] = True
     
     # 5. Salvarea fișierului
-    output_path = ROOT / "dead_ball_candidates.csv"
+    output_path = DEAD
     with open(output_path, "w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
         writer.writerow(["frame", "dead_candidate"])

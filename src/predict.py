@@ -1,12 +1,12 @@
 
 from pathlib import Path
 import csv
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-INPUT = ROOT / "possession_ha.csv"
-DEAD_CANDIDATES = ROOT / "dead_ball_candidates.csv"
-OUTPUT = ROOT / "submission_v5.csv"
+from src.paths import POSSESSION as INPUT, DEAD as DEAD_CANDIDATES, SUBMISSION as OUTPUT
 
 N_FRAMES = 199_319
 

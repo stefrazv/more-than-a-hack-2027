@@ -2,10 +2,12 @@
 from pathlib import Path
 import csv
 import math
+import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-FEATURES_PATH = PROJECT_ROOT / "features_ball.csv"
-OUTPUT_PATH = PROJECT_ROOT / "possession_ha.csv"
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.paths import FEATURES as FEATURES_PATH, POSSESSION as OUTPUT_PATH, DEAD as DEAD_PATH
 
 EXPECTED_FRAMES = 199_319
 
@@ -15,7 +17,6 @@ MIN_DISTANCE_MARGIN_M = 0.75
 CONFIRMATION_FRAMES = 25
 
 
-DEAD_PATH = PROJECT_ROOT / "dead_ball_candidates.csv"
 
 
 def read_dead(path):

@@ -11,7 +11,8 @@ STEPS = [
     "src/predict.py",
 ]
 
-SUBMISSION = "submission_v5.csv"
+sys.path.insert(0, str(ROOT))
+from src.paths import SUBMISSION
 
 
 def run(command):
@@ -23,7 +24,7 @@ def main():
     for step in STEPS:
         run([sys.executable, step])
 
-    run([sys.executable, "evaluation/validate_submission.py", SUBMISSION])
+    run([sys.executable, "evaluation/validate_submission.py", str(SUBMISSION)])
 
 
 if __name__ == "__main__":

@@ -1,20 +1,22 @@
-"""Soluția ML pe meciul nostru (versiunea aleasă pe DFL stricat).
+"""The ML solution on the competition match.
 
-1. modelul de D se antrenează pe cele 7 meciuri DFL STRICATE și lipite la loc
-   (degrade.py + stitch.py), ca să semene cu ce primește pe meciul nostru;
-2. pe meciul nostru: sloturile se lipesc în 11 jucători pe echipă (stitch.py),
-   modelul prezice "oprit / în joc", apoi netezire (opriri >= 4 s, reluări >= 2 s);
-3. H/A = PathCRF pe porțiunile în joc + vot cu mingea: o posesie PathCRF își schimbă
-   echipa dacă mingea o vede clar (<= 2 m, avantaj >= 0,75 m) la cealaltă echipă
-   în >= 60% din cadrele cu dovadă (minimum 1 s);
-4. posesie minimă tau = 2 s; în afara reprizelor X; înainte de lovitura de început
-   a reprizei a doua D (limită publicată în DATA.md/FAQ.md).
+Everything needed is in the repository: the PathCRF code and pretrained model
+(third_party/pathcrf) and our dead-ball model (trained_models/dead_ball_model.joblib, produced by
+train_dead_model.py). Both were trained on external data only (DFL/IDSSE matches).
 
-Toate alegerile au fost făcute pe DFL stricat (ha_fusion_dfl.py, robust_dfl.py).
-Afișează doar agregate. Fișiere: pathcrf_out/submission_ml.csv, pathcrf_out/dead_model.joblib.
+1. D: stitch the 46 ATD slots into 11 players per team (stitch.py), compute speeds, predict
+   dead / alive with the dead-ball model, then drop stoppages < 4 s and restarts < 2 s.
+2. H/A: PathCRF on the alive stretches, plus a ball vote: a PathCRF possession changes team
+   if the ball clearly sits with the other team (nearest player <= 2 m, margin >= 0.75 m)
+   on >= 60% of the frames with ball evidence (at least 1 s of evidence).
+3. Minimum possession tau = 2 s. X outside the halves; D before the second-half kick-off
+   (boundaries published in DATA.md / FAQ.md).
 
-Înainte: python src/run_all.py (are nevoie de submission_v5.csv și features_ball.csv).
-    E:\\mtah\\pathcrf\\.venv\\Scripts\\python.exe src\\run_ml.py --pathcrf E:\\mtah\\pathcrf
+All parameters were chosen on degraded DFL matches (robust_dfl.py, ha_fusion_dfl.py).
+Prints aggregates only. Output: pathcrf_out/submission_ml.csv.
+
+Needs features_ball.csv (python src/features.py) for the ball positions.
+    python src/run_ml.py            (add --cpu to force CPU)
 """
 from pathlib import Path
 import argparse
@@ -25,30 +27,31 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
+PATHCRF = ROOT / "third_party" / "pathcrf"
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(PATHCRF))
+
 from src.check_slots import load_slots  # noqa: E402
 from src.dead_dfl import frame_features, smooth  # noqa: E402
-from src.eval_dfl import ground_truth, load_model, min_duration, pathcrf_labels  # noqa: E402
+from src.eval_dfl import load_model, min_duration, pathcrf_labels  # noqa: E402
 from src.ha_fusion_dfl import ball_evidence, vote  # noqa: E402
-from src.paths import ATD_PATH, FEATURES, META_PATH, SUBMISSION  # noqa: E402
+from src.paths import ATD_PATH, FEATURES, META_PATH  # noqa: E402
 from src.pathcrf_adapter import OUT, PITCH_X_PATHCRF, build_tracking, describe  # noqa: E402
-from src.robust_dfl import degraded_table, load, train, with_episodes  # noqa: E402
+from src.robust_dfl import with_episodes  # noqa: E402
 
+MODEL_PATH = ROOT / "trained_models" / "dead_ball_model.joblib"
 N_FRAMES = 199_319
 SECOND_HALF_EVAL_START, SECOND_HALF_KICKOFF = 110808, 113742   # DATA.md / FAQ.md
 PITCH_Y = 68.0
 MIN_DEAD_S, MIN_ALIVE_S = 4, 2
 TAU_S = 2
 VOTE_DIST_M = 2.0
-DEGRADE_SEED = 47
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pathcrf", required=True)
     parser.add_argument("--cpu", action="store_true")
     opts = parser.parse_args()
-    sys.path.insert(0, str(opts.pathcrf))
     import joblib
     import torch
     from datatools.utils import calculate_running_features
@@ -56,17 +59,8 @@ def main():
     device = "cpu" if opts.cpu or not torch.cuda.is_available() else "cuda:0"
     OUT.mkdir(exist_ok=True)
 
-    print("1. Modelul de D pe cele 7 meciuri DFL stricate și lipite...")
-    folder = Path(opts.pathcrf) / "data" / "sportec" / "tracking_processed"
-    feats, labels = [], []
-    for path in sorted(folder.glob("*.parquet")):
-        df = load(folder, path.stem)
-        feats.append(frame_features(degraded_table(df, DEGRADE_SEED, calculate_running_features), False))
-        labels.append(ground_truth(df)[0] == "D")
-    model_d = train(feats, labels)
-    joblib.dump(model_d, OUT / "dead_model.joblib")
-
-    print("2. Meciul nostru: lipirea sloturilor, vitezele, D...")
+    print("1. Stitching slots, speeds, dead-ball model...")
+    model_d = joblib.load(MODEL_PATH)
     slots_xy, slot_team = load_slots(ATD_PATH, META_PATH)
     table = calculate_running_features(
         build_tracking(slots_xy, slot_team, np.full(N_FRAMES, "H", dtype=object))).reset_index(drop=True)
@@ -74,33 +68,29 @@ def main():
     frames = table["frame_id"].to_numpy()
     dead = smooth(model_d.predict_proba(frame_features(table, False))[:, 1] > 0.5, period, MIN_DEAD_S, MIN_ALIVE_S)
 
-    print("3. PathCRF + vot cu mingea...")
-    model, args = load_model(opts.pathcrf, device)
+    print(f"2. PathCRF on {device} + ball vote...")
+    model, args = load_model(PATHCRF, device)
     team, _ = pathcrf_labels(model, args, with_episodes(table, dead))
     team = pd.Series(team).ffill().bfill().to_numpy(dtype=object)
 
     feat = pd.read_csv(FEATURES)
-    table["ball_x"] = feat["ball_x"].to_numpy(float)[frames] * PITCH_X_PATHCRF   # ATD: coordonate 0-1
+    table["ball_x"] = feat["ball_x"].to_numpy(float)[frames] * PITCH_X_PATHCRF   # ATD coordinates are 0-1
     table["ball_y"] = feat["ball_y"].to_numpy(float)[frames] * PITCH_Y
     evidence = ball_evidence(table, VOTE_DIST_M)
     team = vote(team, evidence, dead)
 
-    # 4. fișierul complet
-    v5 = pd.read_csv(SUBMISSION)["label"].to_numpy(dtype=object)
-    labels_out = np.full(N_FRAMES, "X", dtype=object)
-    labels_out[SECOND_HALF_EVAL_START:SECOND_HALF_KICKOFF] = "D"
-    labels_out[frames] = np.where(dead, "D", team)
-    labels_out = min_duration(labels_out, TAU_S)
+    labels = np.full(N_FRAMES, "X", dtype=object)
+    labels[SECOND_HALF_EVAL_START:SECOND_HALF_KICKOFF] = "D"
+    labels[frames] = np.where(dead, "D", team)
+    labels = min_duration(labels, TAU_S)
     out_csv = OUT / "submission_ml.csv"
-    pd.DataFrame({"frame": np.arange(N_FRAMES), "label": labels_out}).to_csv(out_csv, index=False)
+    pd.DataFrame({"frame": np.arange(N_FRAMES), "label": labels}).to_csv(out_csv, index=False)
 
-    graded = labels_out != "X"
-    print("\n4. Agregate")
-    print(f"  D pe cadrele evaluate: ML {np.mean(labels_out[graded] == 'D'):.1%} | V5 {np.mean(v5[graded] == 'D'):.1%}"
-          f" | DFL, ca reper: 40-52%")
-    print(f"  dovadă de minge (<= {VOTE_DIST_M:.0f} m) pe {np.mean(pd.notna(evidence[~dead])):.1%} din cadrele în joc")
-    describe("V5", v5)
-    describe("ML", labels_out)
+    graded = labels != "X"
+    print("\n3. Aggregates")
+    print(f"  D on graded frames: {np.mean(labels[graded] == 'D'):.1%} (DFL reference: 40-52%)")
+    print(f"  ball evidence (<= {VOTE_DIST_M:.0f} m) on {np.mean(pd.notna(evidence[~dead])):.1%} of alive frames")
+    describe("ML", labels)
 
     print()
     subprocess.run([sys.executable, str(ROOT / "evaluation" / "validate_submission.py"), str(out_csv)], check=False)

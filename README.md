@@ -1,3 +1,66 @@
+# Raumdeuters — Phase 1 submission
+
+This fork contains team **Raumdeuters**' solution to Phase 1 (ball possession, BAR-ATH).
+One command regenerates our submission file, `Raumdeuters.csv`, byte for byte.
+
+## How to reproduce
+
+**1. Data.** Unpack the match bundle into `data/` as described in [data/README.md](data/README.md).
+Only two files are read: `data/tactical/BAR-ATH_tactical_atd.txt` and `data/tactical/BAR-ATH_tactical_atd.xml`.
+Nothing else is downloaded: the pretrained PathCRF model and our dead-ball model are in the repository.
+
+**2. Environment.** Python 3.11 (developed and tested with 3.11.9 on Windows 11).
+
+```bash
+py -3.11 -m venv .venv                     # Windows   (macOS / Linux: python3.11 -m venv .venv)
+.venv\Scripts\activate                     # Windows   (macOS / Linux: source .venv/bin/activate)
+
+# Optional, NVIDIA GPU only: install the CUDA build of torch first
+pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cu132
+
+pip install -r requirements-solution.txt
+```
+
+A GPU is not required. Without one, PathCRF runs on the CPU and produces the identical file.
+
+**3. Run.**
+
+```bash
+python src/run_all.py            # add --cpu to force the CPU even if a GPU is present
+```
+
+This writes `Raumdeuters.csv` in the repository root and checks it with the official validator.
+It takes about 1 minute with a GPU and about 5 minutes on the CPU.
+
+**4. Check.** The command prints the file's SHA256, which must be:
+
+```
+374C435288A8DC41B6A51186E3217016522EAC869555D95CD17ED6CC343AF68C
+```
+
+We verified this on GPU and CPU, in a fresh environment built only from `requirements-solution.txt`.
+
+## What runs
+
+| step | file | what it does |
+|---|---|---|
+| 1 | `src/features.py` | ball position per frame from the ATD |
+| 2 | `src/run_ml.py` | dead-ball model (D), PathCRF + ball vote (H/A), minimum possession of 2 s |
+| 3 | `src/run_all.py` | runs 1–2, writes `Raumdeuters.csv`, validates it, prints the SHA256 |
+
+Models, both trained only on external data (the 7 public DFL/IDSSE Bundesliga matches, CC BY 4.0):
+
+- `third_party/pathcrf/`: PathCRF (Kim et al., KDD 2026), code and pretrained model, unmodified, MPL-2.0. See its `SOURCE.md`.
+- `trained_models/dead_ball_model.joblib`: our dead-ball classifier, produced by `src/train_dead_model.py`.
+  Retraining it needs the DFL data and is not part of reproducing the submission.
+
+The approach, the data used and the limitations are described in our technical document.
+
+---
+
+*Everything below is the organisers' original README.*
+
+---
 # More than a Hack 2027 — Phase 1: Ball Possession
 
 **Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)

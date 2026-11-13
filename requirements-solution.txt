@@ -1,2 +1,27 @@
+# Everything needed to reproduce our submission: the V5 rules and the ML pipeline
+# (third_party/pathcrf + trained_models/dead_ball_model.joblib).
+# Python 3.11 (developed and tested with 3.11.9 on Windows 11).
+#
+# NVIDIA GPU: install the CUDA build of torch first, then this file:
+#   pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cu132
+#   pip install -r requirements-solution.txt
+# CPU only:
+#   pip install -r requirements-solution.txt
+#
+# scikit-learn is pinned exactly because dead_ball_model.joblib was saved with 1.9.1.
+
 numpy==2.4.6
-pandas==3.0.6
+pandas==2.3.3
+scipy==1.17.1
+scikit-learn==1.9.1
+joblib==1.6.0
+torch==2.15.0
+torch-geometric==2.8.1
+tqdm==4.70.1
+matplotlib==3.11.2
+
+# Only for retraining the dead-ball model (src/train_dead_model.py) and preprocessing the
+# DFL/IDSSE matches with third_party/pathcrf/datatools/preprocess.py. Not needed to reproduce.
+#   kloppy==3.19.1
+#   rdp==0.8
+#   pyarrow==26.0.1

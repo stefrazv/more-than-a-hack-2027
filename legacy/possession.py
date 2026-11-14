@@ -22,7 +22,7 @@ CONFIRMATION_FRAMES = 25
 def read_dead(path):
     if not path.exists():
         raise FileNotFoundError(
-            f"{path.name} lipseste. Ruleaza intai: python src/dead_ball.py"
+            f"{path.name} lipseste. Ruleaza intai: python legacy/dead_ball.py"
         )
 
     with path.open("r", newline="", encoding="utf-8") as file:

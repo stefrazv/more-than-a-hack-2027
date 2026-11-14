@@ -1,15 +1,16 @@
-"""Mingea DFL "trădează" starea jocului? (verificare de scurgere de informație)
+"""Does the DFL ball give away the state of play? (information-leak check)
 
-Pe fiecare meci DFL compară cadrele cu jocul oprit cu cele în joc:
-  - cât de des lipsește mingea;
-  - cât de des stă mingea complet nemișcată (deplasare 0 între cadre);
-  - cât de des e mingea în afara terenului.
-Dacă mingea lipsește/îngheață aproape doar când jocul e oprit, intrările de minge
-sunt o scurtătură care nu există în tracking-ul nostru și trebuie scoase.
+For each DFL match, compares dead frames with alive frames:
+  - how often the ball is missing;
+  - how often the ball is completely still (zero displacement between frames);
+  - how often the ball is outside the pitch.
+If the ball goes missing or freezes almost only when play is dead, ball inputs are a
+shortcut that does not exist in the competition tracking and must be dropped.
+(Result: the ball is frozen on ~100% of dead frames, so the D model uses players only.)
 
-Afișează doar procente.
+Prints percentages only.
 
-    E:\\mtah\\pathcrf\\.venv\\Scripts\\python.exe src\\check_dfl_ball.py --pathcrf E:\\mtah\\pathcrf
+    python src/check_dfl_ball.py --dfl <folder with the preprocessed DFL matches (*.parquet)>
 """
 from pathlib import Path
 import argparse
@@ -22,11 +23,11 @@ PITCH_X, PITCH_Y = 105.0, 68.0
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pathcrf", required=True)
+    parser.add_argument("--dfl", required=True, help="folder with the preprocessed DFL matches (*.parquet)")
     opts = parser.parse_args()
-    folder = Path(opts.pathcrf) / "data" / "sportec" / "tracking_processed"
+    folder = Path(opts.dfl)
 
-    print(f"{'meci':<8}{'lipsă: oprit':>14}{'lipsă: joc':>12}{'nemișcată: oprit':>18}{'nemișcată: joc':>16}{'afară: oprit':>14}{'afară: joc':>12}")
+    print(f"{'match':<8}{'missing: dead':>14}{'missing: alive':>16}{'still: dead':>14}{'still: alive':>14}{'out: dead':>12}{'out: alive':>12}")
     for path in sorted(folder.glob("*.parquet")):
         df = pd.read_parquet(path, columns=["period_id", "frame_id", "ball_state", "ball_x", "ball_y"])
         df = df.sort_values(["period_id", "frame_id"]).reset_index(drop=True)
@@ -42,9 +43,9 @@ def main():
         def share(flag, mask):
             return f"{100 * flag[mask].mean():.1f}%"
 
-        print(f"{path.stem:<8}{share(missing, dead):>14}{share(missing, ~dead):>12}"
-              f"{share(frozen, dead):>18}{share(frozen, ~dead):>16}"
-              f"{share(outside, dead):>14}{share(outside, ~dead):>12}")
+        print(f"{path.stem:<8}{share(missing, dead):>14}{share(missing, ~dead):>16}"
+              f"{share(frozen, dead):>14}{share(frozen, ~dead):>14}"
+              f"{share(outside, dead):>12}{share(outside, ~dead):>12}")
 
 
 if __name__ == "__main__":

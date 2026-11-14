@@ -1,4 +1,10 @@
+"""Ball position and nearest-player distances per frame, from the raw ATD.
 
+Writes features_ball.csv (one row per frame). The ML pipeline uses the ball position
+for the ball vote (run_ml.py). Prints aggregate counts only.
+
+    python src/features.py
+"""
 from pathlib import Path
 import csv
 import math
@@ -19,7 +25,7 @@ PITCH_WIDTH = 68.0
 def nearest_team_distances(
     players_text, ball_x, ball_y, team_of_track
 ):
-    """Distanța minimă în metri până la fiecare echipă."""
+    """Distance in metres from the ball to the nearest player of each team."""
 
     nearest_home = math.inf
     nearest_away = math.inf
@@ -28,14 +34,14 @@ def nearest_team_distances(
 
     if len(player_groups) != len(team_of_track):
         raise ValueError(
-            "Numărul sloturilor nu corespunde metadatelor"
+            "Number of slots does not match the metadata"
         )
 
     for slot, group in enumerate(player_groups):
         fields = group.split(",")
 
         if len(fields) != 3:
-            raise ValueError(f"Slot invalid: {slot}")
+            raise ValueError(f"Invalid slot: {slot}")
 
         player_x = float(fields[0])
         player_y = float(fields[1])
@@ -63,7 +69,7 @@ def nearest_team_distances(
 
 
 def read_features(atd_path, meta_path):
-    """Extrage caracteristicile geometrice pe cadru."""
+    """Geometric features per frame."""
 
     team_of_track = team_of_each_track(meta_path)
 
@@ -73,7 +79,7 @@ def read_features(atd_path, meta_path):
 
             if len(parts) != 3:
                 raise ValueError(
-                    f"Format ATD invalid la linia {expected_frame + 1}"
+                    f"Invalid ATD format at line {expected_frame + 1}"
                 )
 
             frame_id = int(parts[0])
@@ -81,14 +87,14 @@ def read_features(atd_path, meta_path):
 
             if video_frame != expected_frame:
                 raise ValueError(
-                    f"Cadru neașteptat: {video_frame}"
+                    f"Unexpected frame: {video_frame}"
                 )
 
             ball_fields = parts[2].split(",")
 
             if len(ball_fields) != 3:
                 raise ValueError(
-                    f"Format minge invalid la cadrul {video_frame}"
+                    f"Invalid ball format at frame {video_frame}"
                 )
 
             ball_x = float(ball_fields[0])
@@ -176,18 +182,18 @@ def main():
             if math.isfinite(row["distance_margin_m"]):
                 distance_count += 1
 
-    print("Cadre procesate:", frame_count)
-    print("Minge detectată:", valid_count)
-    print("Minge în exterior:", outside_count)
-    print("Cadre cu distanțe pentru ambele echipe:", distance_count)
-    print("Fișier generat:", OUTPUT_PATH)
+    print("Frames processed:", frame_count)
+    print("Ball detected:", valid_count)
+    print("Ball outside the pitch:", outside_count)
+    print("Frames with distances for both teams:", distance_count)
+    print("Written:", OUTPUT_PATH)
 
     assert frame_count == EXPECTED_FRAMES
     if OFFICIAL_RUN:
         assert valid_count == 113_488
         assert outside_count == 4_964
 
-    print("Toate verificările au trecut!")
+    print("All checks passed.")
 
 
 if __name__ == "__main__":

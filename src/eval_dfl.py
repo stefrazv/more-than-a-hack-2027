@@ -1,20 +1,20 @@
-"""Evaluarea PathCRF pe un meci DFL, cu metrica oficială a concursului.
+"""PathCRF on a DFL match, scored with the competition's official metric.
 
-Meciurile DFL au, pe fiecare cadru, starea mingii (ball_state) și echipa în posesie
-(ball_owning_team_id), venite din tracking corectat -- același tip de etichete ca
-ground truth-ul concursului. Din ele construim H/A/D și notăm variantele noastre cu
-evaluation/possession_metrics.py, exact ca organizatorii.
+Every DFL frame carries the ball status (ball_state) and the team in possession
+(ball_owning_team_id) -- the same kind of labels as the competition ground truth. We turn
+them into H/A/D and score our variants with evaluation/possession_metrics.py, exactly as
+the organisers do. Also provides the shared helpers (labels, minimum possession, PathCRF
+loading and inference) used by the other scripts and by run_ml.py.
 
-Implicit: J03WR9, singurul meci DFL pe care modelul saved/140 nu l-a văzut la antrenare.
+Default match: J03WR9, the only DFL match the pretrained model saved/140 did not see in training.
 
-Variante:
-  E1  D = adevărul DFL ("oracol"), H/A = PathCRF        -> izolează calitatea H/A
-  E2  fără nicio informație de D, H/A = PathCRF peste tot
-  E3  ca E2, dar cadrele în care PathCRF vede mingea ieșită devin D
-Fiecare cu durata minimă a posesiei tau (o schimbare de echipă mai scurtă e ignorată).
+Variants:
+  E1  D = DFL truth ("oracle"), H/A = PathCRF        -> isolates the H/A quality
+  E2  no D information at all, H/A = PathCRF everywhere
+  E3  as E2, but frames where PathCRF sees the ball go out become D
+Each with a minimum possession tau (a shorter change of team is ignored).
 
-Se rulează din repo-ul nostru, cu Python-ul mediului PathCRF:
-    E:\\mtah\\pathcrf\\.venv\\Scripts\\python.exe src\\eval_dfl.py --pathcrf E:\\mtah\\pathcrf
+    python src/eval_dfl.py --dfl <folder with the preprocessed DFL matches (*.parquet)>
 """
 from pathlib import Path
 import argparse
@@ -25,25 +25,26 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
+PATHCRF = ROOT / "third_party" / "pathcrf"
 sys.path.insert(0, str(ROOT / "evaluation"))
 import possession_metrics as pm  # noqa: E402
 
 FPS = 25
 TRIAL_ID = 140
-TAUS = (0, 1, 2, 3, 4, 6, 8)   # secunde
+TAUS = (0, 1, 2, 3, 4, 6, 8)   # seconds
 
 
-# ------------------------------------------------------------------ etichete
+# ------------------------------------------------------------------ labels
 
 def ground_truth(df):
-    """H/A/D din coloanele DFL. Echipa gazdă = cea care deține mingea când player_id e home_*."""
+    """H/A/D from the DFL columns. Home team = the team owning the ball when player_id is home_*."""
     alive = df["ball_state"].astype(str).str.lower().str.contains("alive").to_numpy()
     owner = df["ball_owning_team_id"].astype("string")
 
     pid = df["player_id"].astype("string") if "player_id" in df else pd.Series(pd.NA, index=df.index, dtype="string")
     home_ids = owner[pid.str.startswith("home", na=False)].mode()
     if home_ids.empty:
-        raise ValueError("nu pot afla id-ul echipei gazdă")
+        raise ValueError("cannot find the home team id")
     home_id = home_ids.iloc[0]
 
     is_home = owner.eq(home_id).fillna(False).to_numpy(dtype=bool)
@@ -54,13 +55,13 @@ def ground_truth(df):
 
 
 def with_half_gaps(labels, period):
-    """Pune un cadru X între reprize, ca scorerul să nu lege posesii peste pauză."""
+    """Insert one X frame between halves, so the scorer does not join possessions across half-time."""
     first = np.r_[False, period[1:] != period[:-1]]
     return np.insert(labels, np.flatnonzero(first), "X")
 
 
 def min_duration(labels, tau_s):
-    """O posesie H/A mai scurtă de tau, lipită direct de o posesie a celeilalte echipe, revine acesteia."""
+    """An H/A possession shorter than tau that directly follows the other team's possession goes back to that team."""
     if tau_s <= 0:
         return labels
     out = labels.copy()
@@ -78,7 +79,7 @@ def min_duration(labels, tau_s):
                 lab = prev_team
             prev_team = lab
         else:
-            prev_team = None          # D sau X: după oprire posesia pornește din nou
+            prev_team = None          # D or X: after a stoppage, possession starts fresh
         i = j
     return out
 
@@ -105,7 +106,7 @@ def load_model(pathcrf_dir, device):
 
 
 def pathcrf_labels(model, args, df):
-    """Rulează PathCRF; întoarce (echipa H/A pe cadru, mingea ieșită pe cadru), aliniate cu df."""
+    """Run PathCRF; returns (H/A team per frame, ball-out flag per frame), aligned with df."""
     from inference import inference
     _, _, micro, _ = inference(model, df, use_crf=args.get("crf_weight", 0) > 0, decode="indep",
                                window_seconds=args.get("window_seconds", None),
@@ -124,35 +125,35 @@ def pathcrf_labels(model, args, df):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pathcrf", required=True)
+    parser.add_argument("--dfl", required=True, help="folder with the preprocessed DFL matches (*.parquet)")
     parser.add_argument("--match", default="J03WR9")
     parser.add_argument("--cpu", action="store_true")
     opts = parser.parse_args()
 
-    sys.path.insert(0, str(opts.pathcrf))
+    sys.path.insert(0, str(PATHCRF))
     import torch
     pd.set_option("future.no_silent_downcasting", True)
     device = "cpu" if opts.cpu or not torch.cuda.is_available() else "cuda:0"
 
-    path = Path(opts.pathcrf) / "data" / "sportec" / "tracking_processed" / f"{opts.match}.parquet"
+    path = Path(opts.dfl) / f"{opts.match}.parquet"
     df = pd.read_parquet(path).sort_values(["period_id", "frame_id"]).reset_index(drop=True)
-    assert df["frame_id"].is_unique, "frame_id nu e unic"
+    assert df["frame_id"].is_unique, "frame_id is not unique"
     period = df["period_id"].to_numpy()
 
     gt, home_id = ground_truth(df)
     gt_full = with_half_gaps(gt, period)
-    print(f"Meci {opts.match}: {len(df)} cadre | D {np.mean(gt == 'D'):.1%} | gazde {np.mean(gt[gt != 'D'] == 'H'):.1%} (id {home_id})")
+    print(f"Match {opts.match}: {len(df)} frames | D {np.mean(gt == 'D'):.1%} | home {np.mean(gt[gt != 'D'] == 'H'):.1%} (id {home_id})")
 
-    model, args = load_model(opts.pathcrf, device)
+    model, args = load_model(PATHCRF, device)
 
-    # E1: episoadele = perioadele în care mingea e în joc după DFL
+    # E1: episodes = the stretches where the ball is alive according to DFL
     start = time.time()
     team1, _ = pathcrf_labels(model, args, df)
-    print(f"E1 inferență: {time.time() - start:.0f} s")
-    print(f"   acoperire pe cadrele în joc: {np.mean(pd.notna(team1[gt != 'D'])):.1%}")
+    print(f"E1 inference: {time.time() - start:.0f} s")
+    print(f"   coverage of alive frames: {np.mean(pd.notna(team1[gt != 'D'])):.1%}")
     e1 = np.where(gt == "D", "D", team1)
 
-    # E2/E3: fără informație de D -- o singură "fază în joc" pe fiecare repriză
+    # E2/E3: no D information -- a single "alive" episode per half
     blind = df.copy()
     blind["ball_state"] = "alive"
     blind["episode_id"] = blind["period_id"]
@@ -160,14 +161,14 @@ def main():
     blind[players] = blind.groupby("phase_id")[players].transform(lambda s: s.ffill().bfill())
     start = time.time()
     team2, out2 = pathcrf_labels(model, args, blind)
-    print(f"E2 inferență: {time.time() - start:.0f} s")
-    print(f"   acoperire: {np.mean(pd.notna(team2)):.1%}")
+    print(f"E2 inference: {time.time() - start:.0f} s")
+    print(f"   coverage: {np.mean(pd.notna(team2)):.1%}")
     e2 = team2.copy()
     e3 = np.where(out2, "D", team2)
-    print(f"Mingea ieșită după PathCRF (E3): {out2.mean():.1%} din cadre; D real: {np.mean(gt == 'D'):.1%}")
+    print(f"Ball out according to PathCRF (E3): {out2.mean():.1%} of frames; true D: {np.mean(gt == 'D'):.1%}")
 
-    print(f"\n{'varianta':<34}{'spellF1':>8}{'macroF1':>9}{'posesii':>9}{'adev.':>7}{'dur(s)':>8}{'joc/oprit F1':>14}{'echipă':>8}")
-    for name, pred in (("E1 D oracol + PathCRF", e1), ("E2 fără D", e2), ("E3 D din 'out' PathCRF", e3)):
+    print(f"\n{'variant':<34}{'spellF1':>8}{'macroF1':>9}{'spells':>9}{'true':>7}{'dur(s)':>8}{'alive/dead F1':>14}{'team':>8}")
+    for name, pred in (("E1 oracle D + PathCRF", e1), ("E2 no D", e2), ("E3 D from PathCRF 'out'", e3)):
         for tau in TAUS:
             p = with_half_gaps(min_duration(np.where(pd.isna(pred), "D", pred).astype(object), tau), period)
             s, m, n_pred, n_gt, dur, ad, team = score(gt_full, p)

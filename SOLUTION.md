@@ -23,7 +23,7 @@ parameter was chosen on external data (Section 4).
 
 ### 2.1 What we started with: rules on the ball (dropped)
 
-Our first versions (V1–V5, still in `src/` and scheduled to move to `legacy/`) were hand-written
+Our first versions (V1–V5; the last one is kept in `legacy/`) were hand-written
 rules: the team of the player nearest to the ball, with hysteresis (a change has to hold for
 25 frames), plus a conservative dead-ball detector based on ball visibility, ball position
 and restarts from the smart tagging.
@@ -140,7 +140,10 @@ trained on this, and every parameter of the pipeline was chosen on it.
 We hold out DFL match `J03WR9`, train the D model on the other six, degrade everything with seed 47,
 and score the full pipeline with the **official metric** (`evaluation/possession_metrics.py`) on
 the held-out match. The parameters below were chosen this way, and the final D model was then
-retrained on all seven matches.
+retrained on all seven matches. The experiments are in `src/` and take the folder of preprocessed
+DFL matches as `--dfl`: `check_dfl_ball.py` (ball leak), `dead_dfl.py` (D features and smoothing),
+`pipeline_dfl.py` (clean tracking), `robust_dfl.py` (degraded tracking) and `ha_fusion_dfl.py`
+(H/A methods, ball distance and $\tau$).
 
 | parameter | value | choices compared |
 |---|---|---|

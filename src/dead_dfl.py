@@ -1,23 +1,25 @@
-"""Detector de minge oprită (D), antrenat pe meciurile DFL (date externe).
+"""Dead-ball (D) detector, trained on the DFL matches (external data).
 
-Intrări pe cadru, calculabile și pe tracking-ul nostru:
-  jucători -- viteza medie/mediană/p90, ce parte stă pe loc, răsfirarea și centrul echipelor;
-  minge    -- e vizibilă, e în afara terenului, viteza ei, distanța la cel mai apropiat jucător;
-  plus medii pe ferestre centrate de 1, 3 și 6 s și diferența "după minus înainte".
-Model: HistGradientBoostingClassifier (scikit-learn), apoi netezire (opriri și reluări
-mai scurte de câteva secunde sunt eliminate).
+Per-frame inputs, computable on the competition tracking too:
+  players -- mean/median/p90 speed, share standing still, spread and centre of each team;
+  ball    -- visible, outside the pitch, its speed, distance to the nearest player;
+  plus means over centred windows of 1, 3 and 6 s and the "after minus before" trend.
+Model: HistGradientBoostingClassifier (scikit-learn), then smoothing (stoppages and
+restarts shorter than a few seconds are removed).
 
-Evaluare: leave-one-match-out pe cele 7 meciuri. Ca să izolăm D, echipa H/A e luată din
-adevărul DFL, iar D din detector; notăm cu metrica oficială (spellF1).
+Evaluation: leave-one-match-out over the 7 matches. To isolate D, the H/A team is taken
+from the DFL truth and D from the detector; scored with the official metric (spellF1).
 
-Trei configurații:
-  jucători          -- fără minge (robust la mingea lipsă)
-  jucători+minge    -- mingea DFL curată
-  jucători+minge41  -- mingea ștearsă pe 41% din cadre (goluri ~2 s), ca la noi, provizoriu
-                       până e gata degrade.py
+Three configurations:
+  players          -- no ball (robust to a missing ball)
+  players+ball     -- clean DFL ball
+  players+ball41   -- ball removed on 41% of frames (gaps ~2 s), as in the competition data
 
-Se rulează din repo-ul nostru, cu Python-ul mediului PathCRF:
-    E:\\mtah\\pathcrf\\.venv\\Scripts\\python.exe src\\dead_dfl.py --pathcrf E:\\mtah\\pathcrf
+Result: players+ball reaches ~0.999 frame accuracy because the DFL ball freezes exactly
+when play stops (see check_dfl_ball.py) -- an artefact the competition data does not have.
+The submission therefore uses the player-only features (frame_features(df, False)).
+
+    python src/dead_dfl.py --dfl <folder with the preprocessed DFL matches (*.parquet)>
 """
 from pathlib import Path
 import argparse
@@ -34,15 +36,15 @@ from src.eval_dfl import ground_truth, score, with_half_gaps  # noqa: E402
 
 FPS = 25
 PITCH_X, PITCH_Y = 105.0, 68.0
-SLOW = 1.0                      # m/s: sub această viteză un jucător "stă pe loc"
+SLOW = 1.0                      # m/s: below this speed a player is "standing still"
 WINDOWS_S = (1, 3, 6)
-SUBSAMPLE = 5                   # antrenăm pe un cadru din 5 (5 fps)
-MIN_RUNS_S = (0, 1, 2, 4)       # grila pentru netezire
+SUBSAMPLE = 5                   # train on one frame in 5 (5 fps)
+MIN_RUNS_S = (0, 1, 2, 4)       # grid for the smoothing
 BALL_MISSING = 0.41
 SEED = 47
 
 
-# ------------------------------------------------------------------ intrări
+# ------------------------------------------------------------------ inputs
 
 def frame_features(df, use_ball, ball_mask=None):
     xcols = sorted(c for c in df.columns if re.fullmatch(r"(home|away)_[^_]+_x", c))
@@ -95,7 +97,7 @@ def frame_features(df, use_ball, ball_mask=None):
 
 
 def ball_gaps(n, period, rng):
-    """Mască provizorie: goluri exponențiale (media 2 s, max 30 s) până la 41% din fiecare repriză."""
+    """Ball mask: exponential gaps (mean 2 s, max 30 s) until 41% of each half is missing."""
     mask = np.zeros(n, dtype=bool)
     for p in np.unique(period):
         idx = np.flatnonzero(period == p)
@@ -107,10 +109,10 @@ def ball_gaps(n, period, rng):
     return mask
 
 
-# ------------------------------------------------------------------ netezire
+# ------------------------------------------------------------------ smoothing
 
 def drop_short_runs(flags, period, min_len, value):
-    """Secvențele de `value` mai scurte de min_len cadre (în interiorul unei reprize) se inversează."""
+    """Runs of `value` shorter than min_len frames (within a half) are flipped."""
     out = flags.copy()
     if min_len <= 0:
         return out
@@ -126,6 +128,7 @@ def drop_short_runs(flags, period, min_len, value):
 
 
 def smooth(dead, period, min_dead_s, min_alive_s):
+    """Drop stoppages shorter than min_dead_s, then live stretches shorter than min_alive_s."""
     dead = drop_short_runs(dead, period, int(min_dead_s * FPS), True)
     return drop_short_runs(dead, period, int(min_alive_s * FPS), False)
 
@@ -134,15 +137,15 @@ def smooth(dead, period, min_dead_s, min_alive_s):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pathcrf", required=True)
+    parser.add_argument("--dfl", required=True, help="folder with the preprocessed DFL matches (*.parquet)")
     opts = parser.parse_args()
     from sklearn.ensemble import HistGradientBoostingClassifier
 
-    folder = Path(opts.pathcrf) / "data" / "sportec" / "tracking_processed"
+    folder = Path(opts.dfl)
     matches = sorted(p.stem for p in folder.glob("*.parquet"))
     rng = np.random.default_rng(SEED)
 
-    print("Încarc meciurile și calculez intrările...")
+    print("Loading the matches and computing the inputs...")
     data = {}
     for m in matches:
         df = pd.read_parquet(folder / f"{m}.parquet").sort_values(["period_id", "frame_id"]).reset_index(drop=True)
@@ -151,14 +154,14 @@ def main():
         mask = ball_gaps(len(df), period, rng)
         data[m] = dict(
             gt=gt, period=period, dead=(gt == "D"),
-            feats={"jucători": frame_features(df, False),
-                   "jucători+minge": frame_features(df, True),
-                   "jucători+minge41": frame_features(df, True, mask)},
+            feats={"players": frame_features(df, False),
+                   "players+ball": frame_features(df, True),
+                   "players+ball41": frame_features(df, True, mask)},
         )
-        print(f"  {m}: {len(df)} cadre, D real {np.mean(gt == 'D'):.1%}")
+        print(f"  {m}: {len(df)} frames, true D {np.mean(gt == 'D'):.1%}")
 
     grid = [(d, a) for d in MIN_RUNS_S for a in MIN_RUNS_S]
-    for config in ("jucători", "jucători+minge", "jucători+minge41"):
+    for config in ("players", "players+ball", "players+ball41"):
         start = time.time()
         results = {g: [] for g in grid}
         frame_acc, d_share = [], []
@@ -173,7 +176,7 @@ def main():
             raw = model.predict_proba(t["feats"][config])[:, 1] > 0.5
             frame_acc.append(np.mean(raw == t["dead"]))
             team = np.where(t["dead"], None, t["gt"])
-            team = pd.Series(team).ffill().bfill().to_numpy(dtype=object)   # echipa adevărată și pe cadrele prezise "în joc"
+            team = pd.Series(team).ffill().bfill().to_numpy(dtype=object)   # the true team, also on frames predicted "alive"
             gt_full = with_half_gaps(t["gt"], t["period"])
             for g in grid:
                 dead = smooth(raw, t["period"], *g)
@@ -183,15 +186,15 @@ def main():
 
         print(f"\n=== {config}  ({time.time() - start:.0f} s) ===")
         ds = np.array(d_share)
-        print(f"  acuratețe pe cadru (fără netezire): {np.mean(frame_acc):.4f} | D prezis {ds[:, 0].mean():.1%} vs real {ds[:, 1].mean():.1%}")
-        print(f"  {'netezire (oprire, joc)':<26}{'spellF1':>9}{'macroF1':>9}{'posesii':>9}{'adev.':>7}{'joc/oprit F1':>14}")
+        print(f"  frame accuracy (no smoothing): {np.mean(frame_acc):.4f} | predicted D {ds[:, 0].mean():.1%} vs true {ds[:, 1].mean():.1%}")
+        print(f"  {'smoothing (dead, alive)':<26}{'spellF1':>9}{'macroF1':>9}{'spells':>9}{'true':>7}{'alive/dead F1':>14}")
         best = max(grid, key=lambda g: np.mean([r[0] for r in results[g]]))
         for g in [(0, 0), (1, 1), (2, 2), (4, 4), best]:
             r = np.array(results[g], dtype=float)
-            mark = "  <- cel mai bun" if g == best else ""
+            mark = "  <- best" if g == best else ""
             print(f"  {f'min {g[0]} s, min {g[1]} s':<26}{r[:, 0].mean():>9.4f}{r[:, 1].mean():>9.4f}"
                   f"{r[:, 2].mean():>9.0f}{r[:, 3].mean():>7.0f}{r[:, 5].mean():>14.4f}{mark}")
-        print(f"  spellF1 pe meci (cel mai bun): " + " ".join(f"{m}={r[0]:.3f}" for m, r in zip(matches, results[best])))
+        print(f"  spellF1 per match (best): " + " ".join(f"{m}={r[0]:.3f}" for m, r in zip(matches, results[best])))
 
 
 if __name__ == "__main__":

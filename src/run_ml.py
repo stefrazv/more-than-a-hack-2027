@@ -22,6 +22,7 @@ from pathlib import Path
 import argparse
 import subprocess
 import sys
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -69,6 +70,7 @@ def main():
     dead = smooth(model_d.predict_proba(frame_features(table, False))[:, 1] > 0.5, period, MIN_DEAD_S, MIN_ALIVE_S)
 
     print(f"2. PathCRF on {device} + ball vote...")
+    warnings.filterwarnings("ignore", message=".*torch.jit.script.*", category=FutureWarning)   # inside PathCRF
     model, args = load_model(PATHCRF, device)
     team, _ = pathcrf_labels(model, args, with_episodes(table, dead))
     team = pd.Series(team).ffill().bfill().to_numpy(dtype=object)

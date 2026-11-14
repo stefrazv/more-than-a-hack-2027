@@ -1,21 +1,20 @@
-"""Lipirea sloturilor ATD în 11 jucători continui pe echipă (pentru PathCRF).
+"""Stitch the ATD slots into 11 continuous players per team (input for PathCRF).
 
-PathCRF sare peste orice episod în care un jucător are fie și un cadru lipsă,
-iar ATD-ul are 46 de sloturi care apar și dispar. Aici transformăm, pe fiecare
-echipă și repriză, sloturile într-un număr fix de "jucători virtuali" fără goluri:
+PathCRF skips any episode in which a player misses even one frame, while the ATD has
+46 slots that appear and disappear. For each team and half, we turn the slots into a
+fixed number of gap-free "virtual players":
 
-1. continuitate: cât timp un slot rămâne vizibil, rămâne la același jucător virtual;
-2. dubluri: un slot aflat la sub DUP_DIST de un jucător deja ocupat e ignorat;
-3. lipire: un slot nou primește jucătorul virtual liber cel mai apropiat de ultima
-   lui poziție (cost = distanța; peste pragul 5 m + 7 m/s * timpul nevăzut,
-   lipirea e doar ultima soluție și e numărată ca "forțată");
-4. goluri: interpolare liniară între ultima și următoarea poziție cunoscută.
+1. continuity: while a slot stays visible, it stays with the same virtual player;
+2. duplicates: a slot closer than DUP_DIST to an already assigned player is ignored;
+3. joining: a new slot takes the free virtual player nearest to its last position
+   (cost = distance; beyond 5 m + 7 m/s * time unseen, the join is a last resort
+   and is counted as "forced");
+4. gaps: linear interpolation between the last and the next known position.
 
-Nu folosește aleatoriu, deci rezultatul e identic la fiecare rulare.
+No randomness, so the result is identical on every run.
 
-Rulare:
-    python src/stitch.py --selftest     (date sintetice, fără date din meci)
-    python src/stitch.py                (pe meciul nostru; afișează doar agregate)
+    python src/stitch.py --selftest     (synthetic data, no match data)
+    python src/stitch.py                (on the competition match; prints aggregates only)
 """
 from pathlib import Path
 import argparse
@@ -25,15 +24,15 @@ import numpy as np
 
 FPS = 25
 N_TRACKS = 11
-DUP_DIST = 1.0       # m: sub această distanță, două sloturi sunt același jucător
-BASE_GATE = 5.0      # m: deplasare permisă imediat după dispariție
-MAX_SPEED = 7.0      # m/s: viteza maximă presupusă pe durata golului
-INIT_COST = 30.0     # cost pentru un jucător virtual încă nefolosit
-FORCED = 1000.0      # penalizare pentru lipiturile peste prag
+DUP_DIST = 1.0       # m: below this distance, two slots are the same player
+BASE_GATE = 5.0      # m: displacement allowed right after disappearing
+MAX_SPEED = 7.0      # m/s: maximum speed assumed during the gap
+INIT_COST = 30.0     # cost of a virtual player not used yet
+FORCED = 1000.0      # penalty for joins beyond the gate
 
 
 def _greedy_match(cost):
-    """Perechi (rând, coloană) alese crescător după cost; fiecare rând/coloană o singură dată."""
+    """(row, column) pairs picked by increasing cost; each row and column used once."""
     cost = cost.copy()
     pairs = []
     while np.isfinite(cost).any():
@@ -45,17 +44,17 @@ def _greedy_match(cost):
 
 
 def stitch_team(P, n_tracks=N_TRACKS):
-    """P: (T, n_slots, 2) pozițiile sloturilor unei echipe în metri, NaN = slot gol.
+    """P: (T, n_slots, 2) slot positions of one team in metres, NaN = empty slot.
 
-    Returnează (tracks, stats): tracks are forma (T, n_tracks, 2), fără NaN.
+    Returns (tracks, stats): tracks has shape (T, n_tracks, 2), with no NaN.
     """
     T, n_slots, _ = P.shape
     visible = np.isfinite(P[..., 0])
 
     out = np.full((T, n_tracks, 2), np.nan, dtype=np.float32)
-    slot_of = np.full(n_tracks, -1)          # slotul atribuit fiecărui jucător virtual
-    track_of = np.full(n_slots, -1)          # jucătorul virtual atribuit fiecărui slot
-    since = np.zeros(n_tracks, dtype=int)    # cadrul de la care ține slotul curent
+    slot_of = np.full(n_tracks, -1)          # slot assigned to each virtual player
+    track_of = np.full(n_slots, -1)          # virtual player assigned to each slot
+    since = np.zeros(n_tracks, dtype=int)    # frame since which the current slot is held
     last_pos = np.full((n_tracks, 2), np.nan)
     last_t = np.full(n_tracks, -1)
 
@@ -64,12 +63,12 @@ def stitch_team(P, n_tracks=N_TRACKS):
     for t in range(T):
         v = visible[t]
 
-        # 1. sloturile dispărute își eliberează jucătorul virtual
+        # 1. slots that disappeared release their virtual player
         gone = np.flatnonzero((track_of >= 0) & ~v)
         slot_of[track_of[gone]] = -1
         track_of[gone] = -1
 
-        # 2. continuitate; dacă două sloturi continue se suprapun, îl păstrăm pe cel mai vechi
+        # 2. continuity; if two continuing slots overlap, keep the older one
         cont = np.flatnonzero(track_of >= 0)
         if cont.size > 1:
             pos = P[t, cont]
@@ -85,7 +84,7 @@ def stitch_team(P, n_tracks=N_TRACKS):
             cont = np.flatnonzero(track_of >= 0)
         out[t, track_of[cont]] = P[t, cont]
 
-        # 3. sloturi noi: dubluri, apoi lipire pe jucătorii virtuali liberi
+        # 3. new slots: drop duplicates, then join them to the free virtual players
         new = np.flatnonzero(v & (track_of < 0))
         if new.size:
             taken = out[t, slot_of >= 0]
@@ -129,7 +128,7 @@ def stitch_team(P, n_tracks=N_TRACKS):
         last_t[active] = t
         stats["frames_full"] += int(active.all())
 
-    # 4. golurile: interpolare liniară (la capete: ultima/prima poziție cunoscută)
+    # 4. gaps: linear interpolation (at the ends: last/first known position)
     observed = np.isfinite(out[..., 0])
     gap_lengths = []
     frames = np.arange(T)
@@ -152,7 +151,7 @@ def stitch_team(P, n_tracks=N_TRACKS):
 
 
 def stitch(slots_xy, slot_team, start, end):
-    """Ambele echipe, pe cadrele [start, end]. Returnează {0: (T,11,2), 1: (T,11,2)}, {echipă: stats}."""
+    """Both teams, on frames [start, end]. Returns {0: (T,11,2), 1: (T,11,2)}, {team: stats}."""
     tracks, stats = {}, {}
     for team in (0, 1):
         cols = np.flatnonzero(np.asarray(slot_team) == team)
@@ -160,17 +159,17 @@ def stitch(slots_xy, slot_team, start, end):
     return tracks, stats
 
 
-# ---------------------------------------------------------------- test sintetic
+# ---------------------------------------------------------------- synthetic test
 
 def _synthetic_half(seed, T=25 * 60 * 10, n_players=11, n_slots=24):
-    """11 jucători care se mișcă lin, tăiați în bucăți (medie 40 s) cu goluri (medie 8 s) și dubluri."""
+    """11 smoothly moving players, cut into fragments (mean 40 s) with gaps (mean 8 s) and duplicates."""
     rng = np.random.default_rng(seed)
     true = np.empty((T, n_players, 2))
     pos = rng.uniform([5, 5], [100, 63], size=(n_players, 2))
     vel = np.zeros((n_players, 2))
     for t in range(T):
         vel = 0.98 * vel + rng.normal(0, 0.05, vel.shape)
-        vel = np.clip(vel, -0.3, 0.3)                       # <= ~7,5 m/s pe axă
+        vel = np.clip(vel, -0.3, 0.3)                       # <= ~7.5 m/s per axis
         pos = np.clip(pos + vel, [0, 0], [105, 68])
         true[t] = pos
 
@@ -188,7 +187,7 @@ def _synthetic_half(seed, T=25 * 60 * 10, n_players=11, n_slots=24):
                 P[t:end, s] = true[t:end, p] + rng.normal(0, 0.1, (end - t, 2))
                 owner[t:end, s] = p
                 busy_until[s] = end
-                if rng.random() < 0.15:                      # dublură scurtă
+                if rng.random() < 0.15:                      # short duplicate
                     free2 = np.flatnonzero(busy_until <= t)
                     if free2.size:
                         s2 = free2[0]
@@ -206,12 +205,12 @@ def selftest():
     tracks2, _ = stitch_team(P)
 
     assert tracks.shape == (true.shape[0], N_TRACKS, 2), tracks.shape
-    assert np.isfinite(tracks).all(), "au rămas NaN"
-    assert np.array_equal(tracks, tracks2), "rezultatul nu e determinist"
+    assert np.isfinite(tracks).all(), "NaN left"
+    assert np.array_equal(tracks, tracks2), "result is not deterministic"
 
-    # cât de aproape e fiecare jucător virtual de cel mai apropiat jucător real
+    # how close each virtual player is to the nearest real player
     d = np.linalg.norm(tracks[:, :, None] - true[:, None], axis=-1).min(axis=2)
-    # identitate: pe fereastre de 10 s, ce parte din cadre urmărește același jucător real
+    # identity: in 10 s windows, share of frames that follow the same real player
     nearest = np.linalg.norm(tracks[:, :, None] - true[:, None], axis=-1).argmin(axis=2)
     win = 10 * FPS
     purity = []
@@ -219,16 +218,16 @@ def selftest():
         block = nearest[a:a + win]
         purity.extend(np.bincount(block[:, k]).max() / win for k in range(N_TRACKS))
 
-    print("Test sintetic: 10 minute, 11 jucători, bucăți ~40 s, goluri ~8 s, dubluri")
-    print(f"  pondere poziții observate: {stats['observed_share']:.3f}")
-    print(f"  lipituri: {stats['links']}, forțate: {stats['forced']}, prima folosire: {stats['first_use']}")
-    print(f"  dubluri ignorate (slot-cadre): {stats['duplicates']}, sloturi în plus ignorate: {stats['extras']}")
-    print(f"  distanța la cel mai apropiat jucător real: mediană {np.median(d):.2f} m, p90 {np.percentile(d, 90):.2f} m")
-    print(f"  identitate stabilă pe ferestre de 10 s: {np.mean(purity):.3f}")
+    print("Synthetic test: 10 minutes, 11 players, fragments ~40 s, gaps ~8 s, duplicates")
+    print(f"  share of observed positions: {stats['observed_share']:.3f}")
+    print(f"  joins: {stats['links']}, forced: {stats['forced']}, first use: {stats['first_use']}")
+    print(f"  duplicates ignored (slot-frames): {stats['duplicates']}, extra slots ignored: {stats['extras']}")
+    print(f"  distance to the nearest real player: median {np.median(d):.2f} m, p90 {np.percentile(d, 90):.2f} m")
+    print(f"  identity stable over 10 s windows: {np.mean(purity):.3f}")
 
-    assert np.median(d) < 2.0, "pozițiile lipite sunt prea departe de realitate"
-    assert np.mean(purity) > 0.9, "jucătorii virtuali își schimbă identitatea prea des"
-    print("Testul a trecut!")
+    assert np.median(d) < 2.0, "stitched positions are too far from the real ones"
+    assert np.mean(purity) > 0.9, "virtual players change identity too often"
+    print("Test passed.")
 
 
 def main():
@@ -240,12 +239,12 @@ def main():
     slots_xy, slot_team = load_slots(ATD_PATH, META_PATH)
     for half, (a, b) in enumerate(GRADED, start=1):
         _, stats = stitch(slots_xy, slot_team, a, b)
-        print(f"\n=== Repriza {half} ===")
-        for team, name in ((0, "gazde"), (1, "oaspeți")):
+        print(f"\n=== Half {half} ===")
+        for team, name in ((0, "home"), (1, "away")):
             s = stats[team]
-            print(f"  {name}: observat {100 * s['observed_share']:.1f}% | toți 11 văzuți {100 * s['frames_full']:.1f}% | "
-                  f"lipituri {s['links']} (forțate {s['forced']}) | dubluri (slot-cadre) {s['duplicates']} | "
-                  f"în plus {s['extras']} | gol interpolat: mediană {s['gap_median_s']:.1f} s, max {s['gap_max_s']:.1f} s")
+            print(f"  {name}: observed {100 * s['observed_share']:.1f}% | all 11 seen {100 * s['frames_full']:.1f}% | "
+                  f"joins {s['links']} (forced {s['forced']}) | duplicates (slot-frames) {s['duplicates']} | "
+                  f"extra {s['extras']} | interpolated gap: median {s['gap_median_s']:.1f} s, max {s['gap_max_s']:.1f} s")
 
 
 if __name__ == "__main__":

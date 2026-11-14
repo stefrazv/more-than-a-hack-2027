@@ -1,13 +1,13 @@
-"""Cât de fragmentat e tracking-ul jucătorilor? (pregătire pentru adaptorul PathCRF)
+"""How fragmented is the player tracking? (groundwork for the PathCRF adapter)
 
-PathCRF cere, pe fiecare episod de joc, jucători prezenți pe TOATE cadrele.
-ATD-ul nostru are 46 de sloturi care apar și dispar. Scriptul măsoară cât de
-des și cât de lung apar sloturile, ca să știm cât de greu e să le lipim în
-11 jucători continui pe echipă.
+PathCRF needs, in every episode of play, players present on ALL frames. The competition
+ATD has 46 slots that appear and disappear. This script measures how often and for how
+long slots are filled, i.e. how hard it is to stitch them into 11 continuous players per team.
+It also provides load_slots(), used by the pipeline.
 
-Afișează doar numere agregate (nicio dată cadru cu cadru).
+Prints aggregate numbers only (no frame-level data).
 
-Rulare:  python src/check_slots.py
+    python src/check_slots.py
 """
 from pathlib import Path
 import sys
@@ -22,11 +22,11 @@ from starter.baseline import team_of_each_track
 
 FPS = 25
 PITCH = (105.3, 68.0)
-GRADED = [(11185, 90651), (113742, 190197)]  # reprizele, din kickoff (DATA.md / FAQ.md)
+GRADED = [(11185, 90651), (113742, 190197)]  # the two halves, from kick-off (DATA.md / FAQ.md)
 
 
 def load_slots(atd_path, meta_path):
-    """ATD -> slots_xy (T, S, 2) în metri, NaN unde slotul e gol; slot_team (S,) 0=gazde, 1=oaspeți."""
+    """ATD -> slots_xy (T, S, 2) in metres, NaN where the slot is empty; slot_team (S,) 0 = home, 1 = away."""
     slot_team = np.asarray(team_of_each_track(meta_path), dtype=np.int8)
     n_slots = len(slot_team)
 
@@ -48,7 +48,7 @@ def load_slots(atd_path, meta_path):
 
 
 def runs(mask):
-    """Lungimile secvențelor consecutive de True dintr-un vector boolean."""
+    """Lengths of the runs of consecutive True values in a boolean vector."""
     padded = np.concatenate([[False], mask, [False]])
     edges = np.flatnonzero(padded[1:] != padded[:-1])
     return edges[1::2] - edges[::2]
@@ -57,31 +57,31 @@ def runs(mask):
 def main():
     xy, slot_team = load_slots(ATD_PATH, META_PATH)
     present = np.isfinite(xy[..., 0])
-    print(f"Sloturi: {len(slot_team)}  (gazde {int((slot_team == 0).sum())}, oaspeți {int((slot_team == 1).sum())})")
+    print(f"Slots: {len(slot_team)}  (home {int((slot_team == 0).sum())}, away {int((slot_team == 1).sum())})")
 
     for half, (a, b) in enumerate(GRADED, start=1):
         p = present[a:b + 1]
-        print(f"\n=== Repriza {half}: {b - a + 1} cadre ===")
+        print(f"\n=== Half {half}: {b - a + 1} frames ===")
 
-        for team, name in ((0, "gazde"), (1, "oaspeți")):
+        for team, name in ((0, "home"), (1, "away")):
             cols = np.flatnonzero(slot_team == team)
             count = p[:, cols].sum(axis=1)
             lengths = np.concatenate([runs(p[:, c]) for c in cols])
             used = int((p[:, cols].any(axis=0)).sum())
 
             print(f"  {name}:")
-            print(f"    sloturi folosite în repriză: {used}")
-            print(f"    jucători vizibili pe cadru: medie {count.mean():.2f}, "
-                  f"exact 11: {100 * (count == 11).mean():.1f}%, "
+            print(f"    slots used in the half: {used}")
+            print(f"    visible players per frame: mean {count.mean():.2f}, "
+                  f"exactly 11: {100 * (count == 11).mean():.1f}%, "
                   f"<11: {100 * (count < 11).mean():.1f}%, >11: {100 * (count > 11).mean():.1f}%")
-            print(f"    bucăți de traiectorie: {len(lengths)}; lungime "
-                  f"mediană {np.median(lengths) / FPS:.1f} s, "
+            print(f"    trajectory fragments: {len(lengths)}; length "
+                  f"median {np.median(lengths) / FPS:.1f} s, "
                   f"p10 {np.percentile(lengths, 10) / FPS:.1f} s, "
                   f"p90 {np.percentile(lengths, 90) / FPS:.1f} s")
 
             gaps = np.concatenate([runs(~p[:, c] & (np.cumsum(p[:, c]) > 0)) for c in cols])
             if len(gaps):
-                print(f"    goluri în interiorul unui slot: mediană {np.median(gaps) / FPS:.1f} s")
+                print(f"    gaps inside a slot: median {np.median(gaps) / FPS:.1f} s")
 
 
 if __name__ == "__main__":

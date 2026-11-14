@@ -1,10 +1,8 @@
-"""
-src/degrade.py
-Strică tracking-ul curat DFL ca să semene cu tracking-ul automat al concursului:
-jucători tăiați în bucăți puse în sloturi anonime, pauze între bucăți, dubluri,
-zgomot pe poziții și goluri în minge (41%).
+"""Degrade clean DFL tracking so it resembles the competition's automatic tracking:
+players cut into fragments placed in anonymous slots, gaps between fragments, duplicates,
+position noise and gaps in the ball (41% missing).
 
-Rulare:  python src/degrade.py --selftest
+    python src/degrade.py --selftest
 """
 from pathlib import Path
 import sys
@@ -14,12 +12,12 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-# --- Constante ---
+# --- Constants ---
 FPS = 25
-N_SLOTS = 46                # 0-22 gazde, 23-45 oaspeți
-FRAG_MEAN_S = 90.0          # media lungimii unei bucăți (mediana iese ~40 s, din cauza dublurilor)
-GAP_MEAN_S = 6.0            # pauza medie între două bucăți ale aceluiași jucător
-DUP_PROB = 0.4              # probabilitatea ca o bucată să primească o dublură
+N_SLOTS = 46                # 0-22 home, 23-45 away
+FRAG_MEAN_S = 90.0          # mean fragment length (the median comes out ~40 s, because of duplicates)
+GAP_MEAN_S = 6.0            # mean gap between two fragments of the same player
+DUP_PROB = 0.4              # probability that a fragment gets a duplicate
 DUP_DUR_S = 2.0
 DUP_MIN_M = 0.5
 DUP_MAX_M = 2.0
@@ -32,7 +30,7 @@ NEAR_BALL_M = 5.0
 
 
 def _player_intervals(players_xy, team, rng):
-    """Toate bucățile (start, end, jucător, deplasare) -- originale și dubluri -- pe toată repriza."""
+    """All fragments (start, end, player, offset) -- originals and duplicates -- over the half."""
     T, num_players, _ = players_xy.shape
     frag_mean = FRAG_MEAN_S * FPS
     gap_mean = GAP_MEAN_S * FPS
@@ -67,15 +65,15 @@ def _player_intervals(players_xy, team, rng):
 
 def degrade(players_xy, team, ball_xy, seed=47):
     """
-    players_xy: array (T, 22, 2), poziții în metri pe teren 105 x 68, NaN unde jucătorul lipsește
-    team:       array (22,), 0 = gazde, 1 = oaspeți
-    ball_xy:    array (T, 2), poziția mingii în metri, NaN unde lipsește
-    T = cadrele UNEI reprize, 25 cadre/secundă
+    players_xy: array (T, 22, 2), positions in metres on a 105 x 68 pitch, NaN where the player is missing
+    team:       array (22,), 0 = home, 1 = away
+    ball_xy:    array (T, 2), ball position in metres, NaN where missing
+    T = the frames of ONE half, 25 frames per second
 
-    returnează:
-    slots_xy:   array (T, 46, 2), NaN unde slotul e gol
-    slot_team:  array (46,), sloturile 0-22 = gazde, 23-45 = oaspeți
-    ball_out:   array (T, 2), mingea cu goluri
+    returns:
+    slots_xy:   array (T, 46, 2), NaN where the slot is empty
+    slot_team:  array (46,), slots 0-22 = home, 23-45 = away
+    ball_out:   array (T, 2), the ball with gaps
     """
     rng = np.random.default_rng(seed)
     T = players_xy.shape[0]
@@ -85,9 +83,9 @@ def degrade(players_xy, team, ball_xy, seed=47):
     slot_team[23:] = 1
     slots_xy = np.full((T, N_SLOTS, 2), np.nan)
 
-    # --- Partea 1: jucătorii ---
-    # Bucățile se alocă în ordinea timpului: un slot e liber dacă bucata lui anterioară s-a terminat.
-    # (Alocarea jucător cu jucător fragmenta inutil sloturile și pierdea bucăți.)
+    # --- Part 1: players ---
+    # Fragments are allocated in time order: a slot is free once its previous fragment has ended.
+    # (Allocating player by player fragmented the slots needlessly and lost fragments.)
     intervals = _player_intervals(players_xy, team, rng)
     order = sorted(range(len(intervals)), key=lambda i: (intervals[i][0], i))
     free_at = np.zeros(N_SLOTS, dtype=int)
@@ -106,7 +104,7 @@ def degrade(players_xy, team, ball_xy, seed=47):
     seen = np.isfinite(slots_xy[:, :, 0])
     slots_xy[seen] += rng.normal(0, NOISE_PLAYER_M, size=slots_xy[seen].shape)
 
-    # --- Partea 2: mingea ---
+    # --- Part 2: ball ---
     ball_out = ball_xy + rng.normal(0, NOISE_BALL_M, size=ball_xy.shape)
 
     valid = np.isfinite(players_xy[:, :, 0])
@@ -115,7 +113,7 @@ def degrade(players_xy, team, ball_xy, seed=47):
     n_t = np.sum((dists <= NEAR_BALL_M) & valid, axis=1)
     prob = (1.0 + n_t) / np.sum(1.0 + n_t)
 
-    missing = ~np.isfinite(ball_xy[:, 0])          # lipsurile deja existente se numără la țintă
+    missing = ~np.isfinite(ball_xy[:, 0])          # gaps already present count towards the target
     target = int(round(T * BALL_MISSING))
     gap_mean = BALL_GAP_MEAN_S * FPS
     gap_max = int(BALL_GAP_MAX_S * FPS)
@@ -126,16 +124,16 @@ def degrade(players_xy, team, ball_xy, seed=47):
         end = min(start + min(int(rng.exponential(gap_mean)) + 1, gap_max), T)
         new = np.flatnonzero(~missing[start:end]) + start
         need = target - missing.sum()
-        missing[new[:need]] = True                  # ultimul gol e scurtat ca să ieșim fix la țintă
+        missing[new[:need]] = True                  # the last gap is cut short to hit the target exactly
     ball_out[missing] = np.nan
 
     return slots_xy, slot_team, ball_out
 
 
-# ---------------------------------------------------------------- test sintetic
+# ---------------------------------------------------------------- synthetic test
 
 def _synthetic_half(seed=1, T=67500):
-    """22 de jucători care se mișcă lin (<= 7,5 m/s); gazdele în stânga, oaspeții în dreapta."""
+    """22 smoothly moving players (<= 7.5 m/s); home team on the left, away team on the right."""
     rng = np.random.default_rng(seed)
     lo = np.array([[2, 2]] * 11 + [[55, 2]] * 11, float)
     hi = np.array([[50, 66]] * 11 + [[103, 66]] * 11, float)
@@ -159,39 +157,39 @@ def _runs(mask):
 
 
 def selftest():
-    print("Selftest degrade.py (o repriză sintetică de 45 de minute)...")
+    print("Selftest degrade.py (one synthetic 45-minute half)...")
     players, team, ball = _synthetic_half()
     T = players.shape[0]
     slots, slot_team, ball_out = degrade(players, team, ball, seed=47)
 
-    # 1. forme
+    # 1. shapes
     assert slots.shape == (T, N_SLOTS, 2) and slot_team.shape == (N_SLOTS,) and ball_out.shape == (T, 2)
-    print("1. Forme: OK")
+    print("1. Shapes: OK")
 
-    # 2. niciun slot cu ambele echipe (gazdele stau în x < 52,5, oaspeții în x > 52,5)
+    # 2. no slot holds both teams (home stays at x < 52.5, away at x > 52.5)
     for s in range(N_SLOTS):
         x = slots[:, s, 0][np.isfinite(slots[:, s, 0])]
         if x.size:
-            assert (x < 52.5).all() if slot_team[s] == 0 else (x > 52.5).all(), f"slotul {s} amestecă echipele"
-    print("2. Fiecare slot conține o singură echipă: OK")
+            assert (x < 52.5).all() if slot_team[s] == 0 else (x > 52.5).all(), f"slot {s} mixes the teams"
+    print("2. Every slot holds a single team: OK")
 
-    # 3-4. jucători vizibili și dubluri
-    for k, name in ((0, "gazde"), (1, "oaspeți")):
+    # 3-4. visible players and duplicates
+    for k, name in ((0, "home"), (1, "away")):
         vis = np.isfinite(slots[:, slot_team == k, 0]).sum(axis=1)
         over = 100 * np.mean(vis > 11)
-        print(f"3-4. {name}: vizibili {vis.mean():.2f} pe cadru, peste 11 în {over:.1f}% din cadre")
-        assert 10.0 <= vis.mean() <= 10.6, "media jucătorilor vizibili e în afara intervalului 10,0-10,6"
-        assert 3.0 <= over <= 9.0, "procentul de cadre cu peste 11 sloturi e în afara intervalului 3-9%"
+        print(f"3-4. {name}: {vis.mean():.2f} visible per frame, more than 11 on {over:.1f}% of frames")
+        assert 10.0 <= vis.mean() <= 10.6, "mean number of visible players outside 10.0-10.6"
+        assert 3.0 <= over <= 9.0, "share of frames with more than 11 slots outside 3-9%"
 
-    # 5. lungimea bucăților
+    # 5. fragment length
     lengths = np.concatenate([_runs(np.isfinite(slots[:, s, 0])) for s in range(N_SLOTS)])
     median_s = np.median(lengths) / FPS
-    print(f"5. Mediana bucăților: {median_s:.1f} s")
+    print(f"5. Median fragment: {median_s:.1f} s")
     assert 30 <= median_s <= 55
 
-    # 6. mingea
+    # 6. ball
     missing = 100 * np.mean(~np.isfinite(ball_out[:, 0]))
-    print(f"6. Mingea lipsă: {missing:.2f}%")
+    print(f"6. Ball missing: {missing:.2f}%")
     assert abs(missing - 100 * BALL_MISSING) <= 0.5
 
     # 7. determinism
@@ -199,19 +197,19 @@ def selftest():
     other, _, _ = degrade(players, team, ball, seed=48)
     assert np.array_equal(slots, again, equal_nan=True) and np.array_equal(ball_out, ball_again, equal_nan=True)
     assert not np.array_equal(slots, other, equal_nan=True)
-    print("7. Același seed = același rezultat; alt seed = alt rezultat: OK")
+    print("7. Same seed = same result; other seed = other result: OK")
 
-    # 8. lanțul cu stitch.py
+    # 8. chained with stitch.py
     from src.stitch import stitch_team
-    for k, name in ((0, "gazde"), (1, "oaspeți")):
+    for k, name in ((0, "home"), (1, "away")):
         tracks, _ = stitch_team(slots[:, slot_team == k])
         assert tracks.shape == (T, 11, 2) and np.isfinite(tracks).all()
         real = players[:, team == k]
         d = np.linalg.norm(tracks[:, :, None] - real[:, None], axis=-1).min(axis=2)
-        print(f"8. stitch {name}: distanța la jucătorul real, mediană {np.median(d):.2f} m, p90 {np.percentile(d, 90):.2f} m")
+        print(f"8. stitch {name}: distance to the real player, median {np.median(d):.2f} m, p90 {np.percentile(d, 90):.2f} m")
         assert np.median(d) < 2.0
 
-    print("Testul a trecut!")
+    print("Test passed.")
 
 
 if __name__ == "__main__":

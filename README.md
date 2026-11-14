@@ -54,6 +54,10 @@ Models, both trained only on external data (the 7 public DFL/IDSSE Bundesliga ma
 - `trained_models/dead_ball_model.joblib`: our dead-ball classifier, produced by `src/train_dead_model.py`.
   Retraining it needs the DFL data and is not part of reproducing the submission.
 
+The experiments on the DFL matches that chose every parameter are in `src/*_dfl.py` (run with
+`--dfl <folder with the preprocessed matches>`). Our earlier rule-based version is kept in `legacy/`
+and is not used.
+
 The approach, the data used and the limitations are described in our technical document, [SOLUTION.md](SOLUTION.md).
 
 ---

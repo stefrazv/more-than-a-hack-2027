@@ -10,7 +10,7 @@ ball used only as a secondary signal. The pipeline has three parts:
 
 1. **Dead ball (`D`)**: a gradient-boosting classifier on player-only features (speeds, spread,
    formation), trained on external matches that we first degraded to look like the competition's
-   tracking.
+   tracking, decoded into stoppages with a two-state hidden Markov model (Viterbi).
 2. **Team in possession (`H`/`A`)**: PathCRF (Kim et al., KDD 2026), a pretrained model that infers
    possession from player trajectories alone, corrected by a ball vote where the ball is clearly
    with one team.
@@ -33,7 +33,7 @@ We dropped this approach for two reasons:
 - **The ball is often missing.** In the competition ATD it is absent on roughly 41% of frames, so
   any rule built on the ball has nothing to say for long stretches.
 - **It does not survive realistic tracking.** On external matches degraded to resemble the
-  competition data (Section 4.2), the ball rules scored spellF1 0.18–0.26, against ≈0.42 for the
+  competition data (Section 4.2), the ball rules scored spellF1 0.18–0.30, against ≈0.45 for the
   pipeline below.
 
 ### 2.2 Why trajectories: PathCRF
@@ -75,8 +75,21 @@ scores `D` directly. We predict dead ball with a `HistGradientBoostingClassifier
 when play stops. A model with ball features reached 0.999 accuracy on DFL by learning that artefact,
 which does not exist in the competition ATD.
 
-The raw prediction is smoothed: stoppages shorter than 4 s are merged back into play, then live
-stretches shorter than 2 s are merged into the surrounding stoppage.
+**From probabilities to stoppages: an HMM.** The classifier gives a probability $p_t$ that play is
+dead at frame $t$. Instead of thresholding it, we decode the most likely sequence of states
+$s_t \in \{\text{alive}, \text{dead}\}$ with the Viterbi algorithm (`dead_dfl.viterbi_dead`), per half:
+
+$$\hat s = \arg\max_{s} \sum_t \Big[\, w \log b_{s_t}(p_t) + \log P(s_t \mid s_{t-1}) \Big],
+\qquad b_\text{dead}(p) = p,\; b_\text{alive}(p) = 1 - p,$$
+
+$$P(s_t = s_{t-1}) = 1 - \frac{1}{L_{s}}, \qquad P(s_t \neq s_{t-1}) = \frac{1}{L_{s}},$$
+
+where $L_\text{dead} = 25.26$ s and $L_\text{alive} = 31.35$ s are the mean lengths of stoppages
+and live stretches measured on the 7 DFL matches, and $w = 0.2$ discounts the evidence of each
+frame (consecutive frames are strongly correlated, not independent observations). A stoppage is
+opened only when the dead-ball evidence outweighs the cost of switching state twice, so short
+confident stoppages are kept and long hesitant ones are not. This replaced our first rule (threshold
+0.5, then drop stoppages shorter than 4 s and restarts shorter than 2 s); see Section 4.3.
 
 ### 2.4 Ball vote on top of PathCRF
 
@@ -142,26 +155,33 @@ and score the full pipeline with the **official metric** (`evaluation/possession
 the held-out match. The parameters below were chosen this way, and the final D model was then
 retrained on all seven matches. The experiments are in `src/` and take the folder of preprocessed
 DFL matches as `--dfl`: `check_dfl_ball.py` (ball leak), `dead_dfl.py` (D features and smoothing),
-`pipeline_dfl.py` (clean tracking), `robust_dfl.py` (degraded tracking) and `ha_fusion_dfl.py`
-(H/A methods, ball distance and $\tau$).
+`pipeline_dfl.py` (clean tracking), `robust_dfl.py` (degraded tracking), `ha_fusion_dfl.py`
+(H/A methods, ball distance and $\tau$) and `hmm_dfl.py` (rule vs. HMM for D). The last two were
+repeated with degradation seeds 47, 48 and 49, and we report the mean.
 
 | parameter | value | choices compared |
 |---|---|---|
-| min. stoppage / min. restart | 4 s / 2 s | 0, 1, 2 and 4 s each |
+| D decoding | HMM, $w = 0.2$, $L$ as measured | rule: min. stoppage / restart of 0, 1, 2, 4 s; HMM: $w \in \{1, 0.2, 0.05, 0.02\}$, $L \times \{0.5, 1, 2\}$ |
 | H/A method | PathCRF + ball vote | PathCRF alone; ball rules (V5); ball-first per frame |
 | ball distance | 2 m | 1 m, 2 m |
 | min. possession $\tau$ | 2 s | 1, 2, 3, 4 s |
 
 | setting (held-out DFL match) | spellF1 |
 |---|---|
-| clean tracking, full pipeline | 0.60 |
-| degraded tracking, D model trained on clean data | 0.35 |
-| degraded tracking, D model trained on degraded data + ball vote + $\tau = 2$ s | **≈0.42** |
-| degraded tracking, ball rules (V5) | 0.18–0.26 |
+| clean tracking, full pipeline (rule for D) | 0.60 |
+| degraded tracking, D model trained on clean data (rule for D) | 0.35 |
+| degraded tracking, D model trained on degraded data + ball vote + $\tau = 2$ s, rule for D | 0.433 (0.42–0.45) |
+| same, **HMM for D** (the submission) | **0.455 (0.43–0.47)** |
+| degraded tracking, ball rules (V5) | 0.18–0.30 |
 
-The ≈0.42 is our only estimate of the expected score. It is measured on one held-out match, with
-one degradation seed and a simulated (not measured) degradation model, so treat it as a rough
-estimate.
+Ranges are over the three degradation seeds. The HMM beat the rule on every seed (+0.006, +0.039,
++0.021), and its neighbouring settings ($w = 0.05$ or $0.2$, any $L$ scale) all gained +0.019 to
++0.024: a plateau, not an isolated peak. It also predicts the number of stoppages much better
+(91–95 vs. 92 true on the held-out match, alive/dead F1 0.93–0.94 vs. 0.92–0.93 for the rule).
+
+The 0.455 is our only estimate of the expected score. It is measured on one held-out match, with a
+simulated (not measured) degradation model, and the HMM setting was picked on that same match, so
+treat it as a rough, slightly optimistic estimate.
 
 ## 5. Possession rules implemented
 
@@ -169,25 +189,28 @@ estimate.
 |---|---|
 | **Loose ball, passes, challenges** | PathCRF tracks the possession path. While the ball is between players, the frame belongs to the team of the last player in control, until the other team's player takes it. A change of team that lasts less than $\tau = 2$ s and is followed by the other team again reverts to it, so brief touches and contested balls do not split a possession. |
 | **Ball evidence vs. PathCRF** | A whole possession is reassigned only when the ball contradicts it clearly (≥ 60% of ≥ 1 s of evidence frames, 2 m / 0.75 m margin). Single frames never override it. |
-| **Dead ball** | `D` wherever the dead-ball model predicts a stoppage of at least 4 s. Shorter predicted stoppages stay live. |
-| **Restarts** | After every `D`, possession starts fresh: the 2 s minimum is not applied across a stoppage. Live stretches shorter than 2 s between stoppages count as `D`. |
+| **Dead ball** | `D` wherever the HMM decodes a stoppage (Section 2.3). There is no fixed minimum length: a stoppage is kept when the dead-ball evidence over its frames outweighs the cost of two state changes. |
+| **Restarts** | After every `D`, possession starts fresh: the 2 s minimum is not applied across a stoppage. A brief restart between two stoppages stays `D` unless the evidence for live play outweighs the cost of the extra state changes. |
 | **Half boundaries** | `X` outside the graded halves. Between the start of the second-half video block (frame 110808) and the second-half kick-off (frame 113742), `D`. Both boundaries are published in `DATA.md` / `FAQ.md`. |
 | **Abstention** | We do not abstain (`X`) inside the halves. Every graded frame gets `H`, `A` or `D`. |
 
-On BAR-ATH this gives 244 possessions with a mean of 12.8 s, Barcelona holding 62.5% of the
-`H`/`A` frames, and `D` on 50.8% of graded frames. That share is at the upper end of the
-DFL range of 40–52%.
+On BAR-ATH this gives 249 possessions with a mean of 11.9 s, Barcelona holding 61.9% of the
+`H`/`A` frames, and `D` on 53.2% of graded frames. That share is slightly above the DFL range of
+40–52% (Section 6).
 
 ## 6. Limitations, and what we would do with more time
 
 - **The degradation is a model, not a measurement.** We matched fragment lengths, gaps, duplicates
   and ball loss to what we saw in the ATD, but not every failure mode. With more time we would fit
   the degradation parameters to the ATD statistics systematically and test several seeds.
-- **Validation is on one held-out match and one seed.** We would repeat it with a leave-one-match-out
-  loop and seeds 47–49, and keep only the parameters that are stable across them.
-- **D is the weakest part.** 50.8% `D` suggests we over-predict short stoppages. Next steps would
-  be a temporal model (HMM / Viterbi) instead of fixed minimum durations, training on several
-  degradation seeds, and adding the smart-tagging set pieces as restart anchors.
+- **Validation is on one held-out match.** We used three degradation seeds, but always the same
+  test match. A leave-one-match-out loop would give a less optimistic estimate.
+- **D is the weakest part.** On BAR-ATH we predict `D` on 53.2% of graded frames, slightly above
+  every DFL match (40–52%). Either this match has more stoppage time, or the dead-ball model
+  over-predicts on LaLiga tracking; without the ground truth we could not tell, and we did not
+  tune on the competition match to find out. Next steps: train the D model on several degradation
+  seeds, a semi-Markov model (explicit duration distributions instead of the HMM's geometric ones),
+  and the smart-tagging set pieces as restart anchors.
 - **PathCRF is used as-is.** It was trained on clean DFL tracking and Bundesliga football. Fine-tuning
   it on degraded, stitched DFL would likely help most.
 - **Stitching errors propagate.** A forced join can swap two players. PathCRF is fairly robust to
@@ -207,7 +230,7 @@ Only `data/tactical/BAR-ATH_tactical_atd.txt` and `.xml` are read. The command w
 `Raumdeuters.csv`, validates it with the official validator, and prints its SHA256:
 
 ```
-374C435288A8DC41B6A51186E3217016522EAC869555D95CD17ED6CC343AF68C
+DDD20129A206F289A5BA62EE95686B617FF1E9319FAB24373A746AD5DD3821F8
 ```
 
 We verified this hash in a fresh environment built only from `requirements-solution.txt`, both on an

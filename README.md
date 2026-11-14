@@ -35,7 +35,7 @@ It takes about 1 minute with a GPU and about 5 minutes on the CPU.
 **4. Check.** The command prints the file's SHA256, which must be:
 
 ```
-374C435288A8DC41B6A51186E3217016522EAC869555D95CD17ED6CC343AF68C
+DDD20129A206F289A5BA62EE95686B617FF1E9319FAB24373A746AD5DD3821F8
 ```
 
 We verified this on GPU and CPU, in a fresh environment built only from `requirements-solution.txt`.
@@ -45,7 +45,7 @@ We verified this on GPU and CPU, in a fresh environment built only from `require
 | step | file | what it does |
 |---|---|---|
 | 1 | `src/features.py` | ball position per frame from the ATD |
-| 2 | `src/run_ml.py` | dead-ball model (D), PathCRF + ball vote (H/A), minimum possession of 2 s |
+| 2 | `src/run_ml.py` | dead-ball model + HMM (D), PathCRF + ball vote (H/A), minimum possession of 2 s |
 | 3 | `src/run_all.py` | runs 1–2, writes `Raumdeuters.csv`, validates it, prints the SHA256 |
 
 Models, both trained only on external data (the 7 public DFL/IDSSE Bundesliga matches, CC BY 4.0):

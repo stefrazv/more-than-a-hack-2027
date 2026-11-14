@@ -4,8 +4,10 @@ Everything needed is in the repository: the PathCRF code and pretrained model
 (third_party/pathcrf) and our dead-ball model (trained_models/dead_ball_model.joblib, produced by
 train_dead_model.py). Both were trained on external data only (DFL/IDSSE matches).
 
-1. D: stitch the 46 ATD slots into 11 players per team (stitch.py), compute speeds, predict
-   dead / alive with the dead-ball model, then drop stoppages < 4 s and restarts < 2 s.
+1. D: stitch the 46 ATD slots into 11 players per team (stitch.py), compute speeds, get the
+   dead-ball probability per frame from the dead-ball model, then decode dead / alive with a
+   two-state HMM (Viterbi, dead_dfl.viterbi_dead): mean stoppage 25.26 s and mean live
+   stretch 31.35 s, both measured on the 7 DFL matches; emission weight 0.2.
 2. H/A: PathCRF on the alive stretches, plus a ball vote: a PathCRF possession changes team
    if the ball clearly sits with the other team (nearest player <= 2 m, margin >= 0.75 m)
    on >= 60% of the frames with ball evidence (at least 1 s of evidence).
@@ -33,7 +35,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(PATHCRF))
 
 from src.check_slots import load_slots  # noqa: E402
-from src.dead_dfl import frame_features, smooth  # noqa: E402
+from src.dead_dfl import FPS, frame_features, viterbi_dead  # noqa: E402
 from src.eval_dfl import load_model, min_duration, pathcrf_labels  # noqa: E402
 from src.ha_fusion_dfl import ball_evidence, vote  # noqa: E402
 from src.paths import ATD_PATH, FEATURES, META_PATH  # noqa: E402
@@ -44,7 +46,8 @@ MODEL_PATH = ROOT / "trained_models" / "dead_ball_model.joblib"
 N_FRAMES = 199_319
 SECOND_HALF_EVAL_START, SECOND_HALF_KICKOFF = 110808, 113742   # DATA.md / FAQ.md
 PITCH_Y = 68.0
-MIN_DEAD_S, MIN_ALIVE_S = 4, 2
+MEAN_DEAD_S, MEAN_ALIVE_S = 25.26, 31.35   # mean stoppage / live stretch on the 7 DFL matches (dead_dfl.mean_run_lengths)
+HMM_WEIGHT = 0.2                           # chosen on degraded DFL (hmm_dfl.py, seeds 47-49)
 TAU_S = 2
 VOTE_DIST_M = 2.0
 
@@ -67,7 +70,8 @@ def main():
         build_tracking(slots_xy, slot_team, np.full(N_FRAMES, "H", dtype=object))).reset_index(drop=True)
     period = table["period_id"].to_numpy()
     frames = table["frame_id"].to_numpy()
-    dead = smooth(model_d.predict_proba(frame_features(table, False))[:, 1] > 0.5, period, MIN_DEAD_S, MIN_ALIVE_S)
+    p_dead = model_d.predict_proba(frame_features(table, False))[:, 1]
+    dead = viterbi_dead(p_dead, period, MEAN_DEAD_S * FPS, MEAN_ALIVE_S * FPS, HMM_WEIGHT)
 
     print(f"2. PathCRF on {device} + ball vote...")
     warnings.filterwarnings("ignore", message=".*torch.jit.script.*", category=FutureWarning)   # inside PathCRF

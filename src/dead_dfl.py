@@ -133,6 +133,54 @@ def smooth(dead, period, min_dead_s, min_alive_s):
     return drop_short_runs(dead, period, int(min_alive_s * FPS), False)
 
 
+def mean_run_lengths(dead, period):
+    """Mean length in frames of the dead runs and of the alive runs (within halves)."""
+    runs = {True: [], False: []}
+    for p in np.unique(period):
+        f = dead[period == p]
+        edges = np.flatnonzero(np.diff(np.r_[~f[0], f, ~f[-1]].astype(np.int8)))
+        for a, b in zip(edges[:-1], edges[1:]):
+            runs[bool(f[a])].append(b - a)
+    return float(np.mean(runs[True])), float(np.mean(runs[False]))
+
+
+def viterbi_dead(p_dead, period, mean_dead, mean_alive, weight=1.0):
+    """Most likely dead/alive sequence under a two-state HMM, per half.
+
+    States: 0 = alive, 1 = dead. Staying in a state has probability 1 - 1/L, with L its mean
+    length in frames (mean_alive, mean_dead); leaving it 1/L. The emission score of a frame
+    is weight * log p (dead) or weight * log(1 - p) (alive), p being the classifier's
+    probability. weight < 1 discounts the evidence, since consecutive frames are strongly
+    correlated and are not independent observations.
+    """
+    p = np.clip(np.asarray(p_dead, dtype=float), 1e-6, 1 - 1e-6)
+    stay = np.log1p(-1.0 / np.array([mean_alive, mean_dead]))
+    leave = np.log(1.0 / np.array([mean_alive, mean_dead]))
+    out = np.zeros(len(p), dtype=bool)
+    for half in np.unique(period):
+        idx = np.flatnonzero(period == half)
+        e_alive = weight * np.log1p(-p[idx])
+        e_dead = weight * np.log(p[idx])
+        n = len(idx)
+        came_from_other = np.zeros((n, 2), dtype=bool)   # True: best predecessor is the other state
+        s_alive, s_dead = e_alive[0], e_dead[0]
+        for t in range(1, n):
+            a_stay, a_switch = s_alive + stay[0], s_dead + leave[1]
+            d_stay, d_switch = s_dead + stay[1], s_alive + leave[0]
+            came_from_other[t, 0] = a_switch > a_stay
+            came_from_other[t, 1] = d_switch > d_stay
+            s_alive = max(a_stay, a_switch) + e_alive[t]
+            s_dead = max(d_stay, d_switch) + e_dead[t]
+        state = 1 if s_dead > s_alive else 0
+        path = np.empty(n, dtype=bool)
+        for t in range(n - 1, -1, -1):
+            path[t] = bool(state)
+            if came_from_other[t, state]:
+                state = 1 - state
+        out[idx] = path
+    return out
+
+
 # ------------------------------------------------------------------ main
 
 def main():

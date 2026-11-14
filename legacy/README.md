@@ -6,7 +6,7 @@ compared against before switching to the ML pipeline (see `SOLUTION.md`, section
 V5 labels possession with hand-written rules on the ball: the team of the player nearest to
 the ball, with hysteresis, plus a conservative dead-ball detector based on ball visibility,
 ball position and restarts from the smart tagging. On degraded DFL matches it scored spellF1
-0.18–0.26, against ≈0.42 for the submitted pipeline.
+0.18–0.30, against ≈0.45 for the submitted pipeline.
 
 To run it (same environment, from the repository root):
 

@@ -223,6 +223,11 @@ On BAR-ATH this gives 249 possessions with a mean of 11.9 s, Barcelona holding 6
 - **Stitching errors propagate.** A forced join can swap two players. PathCRF is fairly robust to
   this, but it causes some wrong possession changes.
 - **Ball evidence covers only 43% of live frames**, so most `H`/`A` decisions rest on PathCRF alone.
+- **The video and the homography are unused.** A ball detector run on the tactical video, with its
+  detections mapped to the pitch through the per-frame homography, could fill many of the 41% ball
+  gaps and make the ball vote apply far more often. We did not try it: the DFL matches have no
+  video, so we had no labelled external data to validate it on, and the competition video may not
+  be labelled by hand.
 
 ## 7. Reproduction
 

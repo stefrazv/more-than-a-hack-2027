@@ -16,15 +16,18 @@ ball used only as a secondary signal. The pipeline has three parts:
    with one team.
 3. **Possession rules**: minimum possession length, restart handling, and half boundaries.
 
-Nothing is trained, tuned or checked on the competition match beyond format validation. Every
-parameter was chosen on external data (Section 4).
+Nothing is trained or tuned on the competition match. Every parameter was chosen on external data
+(Section 4). The only checks on the competition match were the official format validator and, once
+the pipeline was frozen, the public 5-minute window as a sanity check (teams not swapped, frames
+aligned), as `RULES.md` allows. It changed nothing.
 
 ## 2. Approach, and why
 
 ### 2.1 What we started with: rules on the ball (dropped)
 
 Our first versions (V1–V5; the last one is kept in `legacy/`) were hand-written
-rules: the team of the player nearest to the ball, with hysteresis (a change has to hold for
+rules in the spirit of the classic tracking-based possession detectors (Hoernig et al., 2016; Link
+and Hoernig, 2017): the team of the player nearest to the ball, with hysteresis (a change has to hold for
 25 frames), plus a conservative dead-ball detector based on ball visibility, ball position
 and restarts from the smart tagging.
 
@@ -107,7 +110,7 @@ that team. On BAR-ATH, ball evidence exists on 43% of live frames.
 | `tactical/BAR-ATH_tactical_smart_tagging.xml` | dropped | used by the rule-based versions for restart anchors; not in the final pipeline |
 | `tactical/BAR-ATH_tactical.mp4`, homography | no | |
 | `broadcast/*` | no | not synchronised with the tactical timeline |
-| public 5-minute ground truth | format checks only | never used for training or for choosing parameters |
+| public 5-minute ground truth | sanity check | run once, after the pipeline was frozen; never used for training or for choosing parameters |
 | full-match ground truth | no | not available to participants |
 
 ## 4. Training data
@@ -238,7 +241,7 @@ DDD20129A206F289A5BA62EE95686B617FF1E9319FAB24373A746AD5DD3821F8
 ```
 
 We verified this hash in a fresh environment built only from `requirements-solution.txt`, both on an
-NVIDIA GPU and on the CPU. A run takes about 1 minute with a GPU and about 5 minutes on the CPU.
+NVIDIA GPU and on the CPU, and on a second computer (CPU only, 8 GB RAM). A run takes about 1 minute with a GPU and about 5 minutes on the CPU.
 To retrain the dead-ball model (optional, needs the DFL data):
 `python src/train_dead_model.py --dfl <folder with the 7 preprocessed matches>`.
 
@@ -250,4 +253,9 @@ To retrain the dead-ball model (optional, needs the DFL data):
 - Bassek M., et al. *An integrated dataset of spatiotemporal and event data in elite soccer.*
   Scientific Data 12, 195 (2025). doi:10.1038/s41597-025-04505-y.
   Data: https://doi.org/10.6084/m9.figshare.28196177 (CC BY 4.0).
+- Hoernig M., Link D., Herrmann M., Radig B., Lames M. *Detection of individual ball possession in
+  soccer.* Proc. 10th International Symposium on Computer Science in Sports (ISCSS 2015), Advances in
+  Intelligent Systems and Computing 392, pp. 103–107. Springer, 2016. doi:10.1007/978-3-319-24560-7_13.
+- Link D., Hoernig M. *Individual ball possession in soccer.* PLoS ONE 12(7), e0179953, 2017.
+  doi:10.1371/journal.pone.0179953.
 - Pedregosa F., et al. *Scikit-learn: Machine Learning in Python.* JMLR 12, 2011.

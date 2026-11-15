@@ -156,8 +156,13 @@ the held-out match. The parameters below were chosen this way, and the final D m
 retrained on all seven matches. The experiments are in `src/` and take the folder of preprocessed
 DFL matches as `--dfl`: `check_dfl_ball.py` (ball leak), `dead_dfl.py` (D features and smoothing),
 `pipeline_dfl.py` (clean tracking), `robust_dfl.py` (degraded tracking), `ha_fusion_dfl.py`
-(H/A methods, ball distance and $\tau$) and `hmm_dfl.py` (rule vs. HMM for D). The last two were
-repeated with degradation seeds 47, 48 and 49, and we report the mean.
+(H/A methods, ball distance and $\tau$), `hmm_dfl.py` (rule vs. HMM for D) and `multiseed_dfl.py`
+(D model trained on one vs. three degradations per match). The last three were run with
+degradation seeds 47, 48 and 49, and we report the mean.
+
+Not every idea made it in. Training the D model on three degradations of each match instead of one
+gained +0.014 on average (+0.037, −0.005, +0.008 over the three seeds): below our +0.02 bar and not
+consistent, so the submission keeps one degradation (seed 47).
 
 | parameter | value | choices compared |
 |---|---|---|
@@ -208,8 +213,7 @@ On BAR-ATH this gives 249 possessions with a mean of 11.9 s, Barcelona holding 6
 - **D is the weakest part.** On BAR-ATH we predict `D` on 53.2% of graded frames, slightly above
   every DFL match (40–52%). Either this match has more stoppage time, or the dead-ball model
   over-predicts on LaLiga tracking; without the ground truth we could not tell, and we did not
-  tune on the competition match to find out. Next steps: train the D model on several degradation
-  seeds, a semi-Markov model (explicit duration distributions instead of the HMM's geometric ones),
+  tune on the competition match to find out. Next steps: a semi-Markov model (explicit duration distributions instead of the HMM's geometric ones),
   and the smart-tagging set pieces as restart anchors.
 - **PathCRF is used as-is.** It was trained on clean DFL tracking and Bundesliga football. Fine-tuning
   it on degraded, stitched DFL would likely help most.
